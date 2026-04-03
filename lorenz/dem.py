@@ -296,7 +296,7 @@ def spm_DEM_int(M, z, w, u):
             if np.isscalar(M[i].v):  
                 v_i[0, 0] = M[i].v  
             else:  
-                v_i[:min(len(M[i].v), v_i.shape[0]), 0] = M[i].v]  
+                v_i[:min(len(M[i].v), v_i.shape[0]), 0] = M[i].v
           
         if M[i].x is not None:  
             if sparse.issparse(M[i].x):  
