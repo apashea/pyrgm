@@ -83,68 +83,66 @@ def spm_unvec(vX, X, debug=False):
   
 def spm_cat(x, d=None, debug=False):  
     """Convert a cell array into a matrix"""  
-    _debug_print(f"spm_cat input (d={d})", x, debug)  
-      
     if not isinstance(x, list):  
-        _debug_print("spm_cat output (not list)", x, debug)  
         return x  
       
     if d is not None:  
+        # Concatenate over specific dimension  
         if d == 1:  
-            result = sparse.vstack([spm_cat(col, debug=debug) for col in x])  
+            return sparse.vstack([spm_cat(col) for col in x])  
         elif d == 2:  
-            result = sparse.hstack([spm_cat(row, debug=debug) for row in x])  
+            return sparse.hstack([spm_cat(row) for row in x])  
         else:  
             raise ValueError("Unknown dimension")  
-        _debug_print(f"spm_cat output (dim={d})", result, debug)  
-        return result  
       
+    # Handle empty list  
     if len(x) == 0:  
-        result = sparse.csr_matrix((0, 0))  
-        _debug_print("spm_cat output (empty list)", result, debug)  
-        return result  
+        return sparse.csr_matrix((0, 0))  
       
-    # Find dimensions  
+    # Find dimensions - FIXED: Check array dimensionality  
     max_rows = 0  
     max_cols = 0  
     for row in x:  
         for item in row:  
-            if hasattr(item, 'shape') and item.shape[0] > 0:  
-                max_rows = max(max_rows, item.shape[0])  
-            if hasattr(item, 'shape') and item.shape[1] > 0:  
-                max_cols = max(max_cols, item.shape[1])  
+            if hasattr(item, 'shape'):  
+                # Check if array has enough dimensions  
+                if len(item.shape) > 0 and item.shape[0] > 0:  
+                    max_rows = max(max_rows, item.shape[0])  
+                if len(item.shape) > 1 and item.shape[1] > 0:  
+                    max_cols = max(max_cols, item.shape[1])  
+                elif len(item.shape) == 1:  
+                    # 1D array - treat as single column  
+                    max_cols = max(max_cols, 1)  
       
-    _debug_print(f"spm_cat found max dimensions", (max_rows, max_cols), debug)  
-      
+    # If no valid matrices found, return empty  
     if max_rows == 0 or max_cols == 0:  
-        result = sparse.csr_matrix((0, 0))  
-        _debug_print("spm_cat output (no valid dimensions)", result, debug)  
-        return result  
+        return sparse.csr_matrix((0, 0))  
       
     # Fill with sparse matrices  
     result_rows = []  
-    for i, row in enumerate(x):  
+    for row in x:  
         row_items = []  
-        for j, item in enumerate(row):  
+        for item in row:  
             if sparse.issparse(item) and item.nnz > 0:  
                 row_items.append(item)  
             elif hasattr(item, 'shape') and item.shape[0] > 0:  
-                row_items.append(sparse.csr_matrix(item))  
+                # Convert to sparse if needed  
+                if len(item.shape) == 1:  
+                    # 1D array - reshape to column  
+                    row_items.append(sparse.csr_matrix(item.reshape(-1, 1)))  
+                else:  
+                    row_items.append(sparse.csr_matrix(item))  
             else:  
+                # Create zero matrix with correct dimensions  
                 row_items.append(sparse.csr_matrix((max_rows, max_cols)))  
           
         if row_items:  
-            result_row = sparse.hstack(row_items)  
-            result_rows.append(result_row)  
-            _debug_print(f"spm_cat row {i} stacked", result_row, debug)  
+            result_rows.append(sparse.hstack(row_items))  
       
     if result_rows:  
-        result = sparse.vstack(result_rows)  
+        return sparse.vstack(result_rows)  
     else:  
-        result = sparse.csr_matrix((0, 0))  
-      
-    _debug_print("spm_cat final output", result, debug)  
-    return result  
+        return sparse.csr_matrix((0, 0))
   
 def spm_DEM_M_custom(model, *varargs, debug=False):  
     """Create a template model structure - Python version"""  
