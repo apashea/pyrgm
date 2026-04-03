@@ -143,6 +143,12 @@ def spm_DEM_M_set(M):
                 # Already sparse, check dimensions  
                 if M[i].l > 0 and (M[i].V.shape[0] != M[i].l or M[i].V.shape[1] != M[i].l):  
                     M[i].V = sparse.eye(M[i].l, M[i].l) * M[i].V[0, 0] if M[i].V.nnz > 0 else sparse.eye(M[i].l, M[i].l)  
+        else:  
+            # CRITICAL: Initialize V if None  
+            if M[i].l > 0:  
+                M[i].V = sparse.eye(M[i].l, M[i].l)  
+            else:  
+                M[i].V = sparse.csr_matrix((0, 0))  
           
         # Handle W (state precision)  
         if M[i].W is not None:  
@@ -156,6 +162,12 @@ def spm_DEM_M_set(M):
                 # Already sparse, check dimensions  
                 if M[i].n > 0 and (M[i].W.shape[0] != M[i].n or M[i].W.shape[1] != M[i].n):  
                     M[i].W = sparse.eye(M[i].n, M[i].n) * M[i].W[0, 0] if M[i].W.nnz > 0 else sparse.eye(M[i].n, M[i].n)  
+        else:  
+            # CRITICAL: Initialize W if None  
+            if M[i].n > 0:  
+                M[i].W = sparse.eye(M[i].n, M[i].n)  
+            else:  
+                M[i].W = sparse.csr_matrix((0, 0))  
       
     # Set estimation parameters  
     nx = sum([level.n for level in M])  
@@ -172,7 +184,7 @@ def spm_DEM_M_set(M):
     if not hasattr(M[0].E, 'n'):  
         M[0].E.n = 6 if nx > 0 else 0  
       
-    # Check functions and set dimensions - CRITICAL FIX  
+    # Check functions and set dimensions  
     for i in range(g-1, -1, -1):  
         if M[i].x is None and M[i].n > 0:  
             M[i].x = sparse.csr_matrix((M[i].n, 1))  
