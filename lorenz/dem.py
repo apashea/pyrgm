@@ -95,10 +95,14 @@ def spm_cat(x, d=None, debug=False):
         else:  
             raise ValueError("Unknown dimension")  
       
-    # Handle cell array - MATLAB spm_cat concatenates along dimension 2 by default  
+    # Handle empty list  
+    if len(x) == 0:  
+        return sparse.csr_matrix((0, 0))  
+      
+    # Check if this is a simple cell array (like w) that needs vertical stacking  
     if all(isinstance(item, (np.ndarray, sparse.spmatrix)) for item in x):  
-        # This is a cell array of matrices - concatenate horizontally  
-        return sparse.hstack([sparse.csr_matrix(item) for item in x])  
+        # For w matrices, stack vertically (along rows)  
+        return sparse.vstack([sparse.csr_matrix(item) for item in x])  
       
     # Handle nested cell array structure  
     result_rows = []  
