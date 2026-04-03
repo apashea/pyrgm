@@ -48,8 +48,8 @@ def spm_cat(x, d=None):
         else:  
             raise ValueError("Unknown dimension")  
       
-    # Handle empty list  
-    if not x or not x[0]:  
+    # Handle empty list - FIXED: check length instead of boolean evaluation  
+    if len(x) == 0:  
         return sparse.csr_matrix((0, 0))  
       
     # Find dimensions  
@@ -85,7 +85,7 @@ def spm_cat(x, d=None):
     if result_rows:  
         return sparse.vstack(result_rows)  
     else:  
-        return sparse.csr_matrix((0, 0)) 
+        return sparse.csr_matrix((0, 0))
   
 def spm_DEM_embed(Y, n, t, dt=1, d=0):  
     """Temporal embedding into derivatives"""  
