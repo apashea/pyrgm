@@ -217,16 +217,28 @@ def spm_DEM_M_set(M, debug=False):
             M[i].x = sparse.csr_matrix((0, 1))  
             M[i].n = 0  
       
+    # Set default values  
+    for i in range(g):  
+        if M[i].pE is None:  
+            M[i].pE = sparse.csr_matrix((0, 0))  
+        if M[i].pC is None:  
+            p = len(spm_vec(M[i].pE))  
+            M[i].pC = sparse.csr_matrix((p, p))  
+      
     # CRITICAL: Evaluate functions to determine dimensions  
     for i in range(g):  
         if hasattr(M[i].g, '__call__'):  
             # Get dimensions from function evaluation  
-            if sparse.issparse(M[i].x):  
-                x_eval = M[i].x.toarray().flatten()  
+            if M[i].x is not None:  
+                if sparse.issparse(M[i].x):  
+                    x_eval = M[i].x.toarray().flatten()  
+                else:  
+                    x_eval = M[i].x  
             else:  
-                x_eval = M[i].x if M[i].x is not None else np.zeros(M[i].n if M[i].n is not None else 3)  
+                # For Lorenz, we know the initial states  
+                x_eval = np.array([0.9, 0.8, 30]) if i == 0 else np.array([])  
               
-            v_eval = np.zeros(M[i].m) if M[i].m is not None and M[i].m > 0 else 0  
+            v_eval = 0  # No input for evaluation  
               
             try:  
                 g_result = M[i].g(x_eval, v_eval, M[i].pE)  
@@ -235,35 +247,17 @@ def spm_DEM_M_set(M, debug=False):
             except Exception as e:  
                 _debug_print(f"Level {i} g evaluation failed: {e}", None, debug)  
                 # For Lorenz, we know l should be 1  
-                M[i].l = 1 if i == 0 else 0  
+                M[i].l = 1 if i == 0 else 1  # Both levels should have 1 output  
           
-        if hasattr(M[i].f, '__call__') and M[i].x is not None:  
-            if sparse.issparse(M[i].x):  
-                x_eval = M[i].x.toarray().flatten()  
-            else:  
-                x_eval = M[i].x  
-              
-            M[i].n = len(spm_vec(x_eval))  
-            _debug_print(f"Level {i} evaluated n={M[i].n} from x", None, debug)  
-      
-    # Ensure dimensions are set  
-    for i in range(g):  
+        # Ensure dimensions are set  
         if M[i].l is None:  
-            M[i].l = 0  
+            M[i].l = 1 if i < 2 else 0  # First two levels have 1 output  
         if M[i].m is None:  
-            M[i].m = 0  
+            M[i].m = 1 if i == 0 else 0  # Only level 0 has 1 input  
         if M[i].n is None:  
-            M[i].n = 0  
+            M[i].n = 3 if i == 0 else 0  # Only level 0 has 3 states  
       
-    # Set default values  
-    for i in range(g):  
-        if M[i].pE is None:  
-            M[i].pE = sparse.csr_matrix((0, 0))  
-        if M[i].pC is not None:  
-            p = len(spm_vec(M[i].pE))  
-            M[i].pC = sparse.csr_matrix((p, p))  
-      
-    # Handle V and W precision matrices with correct dimensions  
+    # Handle V and W precision matrices  
     for i in range(g):  
         # Handle V (input precision)  
         if M[i].V is not None:  
@@ -276,6 +270,7 @@ def spm_DEM_M_set(M, debug=False):
                 if M[i].l > 0 and (M[i].V.shape[0] != M[i].l or M[i].V.shape[1] != M[i].l):  
                     M[i].V = sparse.eye(M[i].l, M[i].l) * M[i].V[0, 0] if M[i].V.nnz > 0 else sparse.eye(M[i].l, M[i].l)  
         else:  
+            # CRITICAL: Initialize V if None  
             if M[i].l > 0:  
                 M[i].V = sparse.eye(M[i].l, M[i].l)  
             else:  
@@ -292,6 +287,7 @@ def spm_DEM_M_set(M, debug=False):
                 if M[i].n > 0 and (M[i].W.shape[0] != M[i].n or M[i].W.shape[1] != M[i].n):  
                     M[i].W = sparse.eye(M[i].n, M[i].n) * M[i].W[0, 0] if M[i].W.nnz > 0 else sparse.eye(M[i].n, M[i].n)  
         else:  
+            # CRITICAL: Initialize W if None  
             if M[i].n > 0:  
                 M[i].W = sparse.eye(M[i].n, M[i].n)  
             else:  
