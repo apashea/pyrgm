@@ -324,3 +324,125 @@ def spm_DEM_int(M, z, w, u):
         x.append(x_i)  
       
     return v, x, z, w  
+
+
+def spm_DEM_int(M, z, w, u):  
+    """Integrate HDM to obtain causal (v) and hidden states (x)"""  
+    m = len(M)  
+    N = z[0].shape[1] if hasattr(z[0], 'shape') else 1024  
+      
+    v = []  
+    x = []  
+      
+    for i in range(m):  
+        # Initialize arrays  
+        v_i = np.zeros((M[i].l if M[i].l > 0 else 1, N))  
+        x_i = np.zeros((M[i].n if M[i].n > 0 else 1, N))  
+          
+        # Initial conditions  
+        if M[i].v is not None:  
+            if np.isscalar(M[i].v):  
+                v_i[0, 0] = M[i].v  
+            else:  
+                v_i[:min(len(M[i].v), v_i.shape[0]), 0] = M[i].v  
+          
+        if M[i].x is not None:  
+            if sparse.issparse(M[i].x):  
+                x_data = M[i].x.toarray().flatten()  
+            else:  
+                x_data = M[i].x  
+            x_i[:min(len(x_data), x_i.shape[0]), 0] = x_data  
+          
+        # Simple Euler integration  
+        for t in range(1, N):  
+            # Update states  
+            if hasattr(M[i].f, '__call__') and M[i].n > 0:  
+                dx = M[i].f(x_i[:, t-1], v_i[:, t-1], M[i].pE)  
+                x_i[:, t] = x_i[:, t-1] + dx * M[0].E.dt  
+                if i < len(w) and hasattr(w[i], 'shape') and w[i].shape[1] > t:  
+                    x_i[:, t] += w[i][:, t]  
+              
+            # Update outputs/causes  
+            if hasattr(M[i].g, '__call__'):  
+                v_i[:, t] = M[i].g(x_i[:, t], u[i][:, t] if i < len(u) and u[i].shape[1] > t else 0, M[i].pE)  
+                if i < len(z) and hasattr(z[i], 'shape') and z[i].shape[1] > t:  
+                    v_i[:, t] += z[i][:, t]  
+          
+        v.append(v_i)  
+        x.append(x_i)  
+      
+    return v, x, z, w  
+  
+def spm_DEM_generate(M, U, P=None, h=None, g=None):  
+    """Generate data for a Hierarchical Dynamic Model (HDM)"""  
+    # Set and check model  
+    M = spm_DEM_M_set(M)  
+      
+    # Determine sequence length  
+    if hasattr(U, 'shape'):  
+        N = U.shape[1]  
+    else:  
+        N = U  
+        U = sparse.csr_matrix((M[-1].l if M[-1].l > 0 else 1, N))  
+      
+    # Initialize parameters  
+    m = len(M)  
+      
+    # Set default hyperparameters  
+    for i in range(m):  
+        if M[i].hE is None:  
+            M[i].hE = 32  
+        if M[i].gE is None:  
+            M[i].gE = 32  
+      
+    # Create innovations  
+    z, w = spm_DEM_z(M, N)  
+      
+    # Place exogenous causes in cell array  
+    u = []  
+    for i in range(m):  
+        u_i = sparse.csr_matrix((M[i].l if M[i].l > 0 else 1, N))  
+        u.append(u_i)  
+    u[-1] = U  
+      
+    # Integrate HDM  
+    v, x, z, w = spm_DEM_int(M, z, w, u)  
+      
+    # Create DEM structure  
+    DEM = type('DEM', (), {})()  
+    DEM.M = M  
+    DEM.Y = v[0]  
+    DEM.pU = type('pU', (), {})()  
+    DEM.pU.v = v  
+    DEM.pU.x = x  
+    DEM.pU.z = z  
+    DEM.pU.w = w  
+    DEM.pP = type('pP', (), {})()  
+    DEM.pP.P = [level.pE for level in M]  
+    DEM.pH = type('pH', (), {})()  
+    DEM.pH.h = [level.hE for level in M]  
+    DEM.pH.g = [level.gE for level in M]  
+      
+    return DEM  
+  
+# Main execution function  
+def generate_lorenz_data():  
+    """Equivalent to the MATLAB code provided"""  
+    # Set random seed  
+    np.random.seed(1)  
+      
+    # Get model of stochastic chaos  
+    M = spm_DEM_M_custom('Lorenz')  
+      
+    # Create innovations & add causes  
+    N = 1024  
+    U = sparse.csr_matrix(([1], ([0], [0])), shape=(1, N))  
+    DEM = spm_DEM_generate(M, U)  
+      
+    return DEM  
+  
+if __name__ == "__main__":  
+    # Test the implementation  
+    DEM = generate_lorenz_data()  
+    print(f"Generated data shape: {DEM.Y.shape}")  
+    print(f"First few values: {DEM.Y[0, :5]}")
