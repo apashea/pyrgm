@@ -119,36 +119,46 @@ def spm_DEM_M_set(M):
             p = len(spm_vec(M[i].pE))  
             M[i].pC = sparse.csr_matrix((p, p))  
       
-    # Handle V and W precision matrices - CRITICAL FIX  
+    # CRITICAL: Ensure dimensions are set before handling V and W  
+    for i in range(g):  
+        # Set default dimensions if not set  
+        if M[i].l is None:  
+            M[i].l = 0  
+        if M[i].m is None:  
+            M[i].m = 0  
+        if M[i].n is None:  
+            M[i].n = 0  
+      
+    # Handle V and W precision matrices  
     for i in range(g):  
         # Handle V (input precision)  
         if M[i].V is not None:  
             if np.isscalar(M[i].V):  
                 # Convert scalar to matrix based on l dimension  
-                if M[i].l is not None and M[i].l > 0:  
+                if M[i].l > 0:  
                     M[i].V = M[i].V * sparse.eye(M[i].l, M[i].l)  
                 else:  
                     M[i].V = sparse.csr_matrix((0, 0))  
             elif sparse.issparse(M[i].V):  
                 # Already sparse, check dimensions  
-                if M[i].l is not None and (M[i].V.shape[0] != M[i].l or M[i].V.shape[1] != M[i].l):  
+                if M[i].l > 0 and (M[i].V.shape[0] != M[i].l or M[i].V.shape[1] != M[i].l):  
                     M[i].V = sparse.eye(M[i].l, M[i].l) * M[i].V[0, 0] if M[i].V.nnz > 0 else sparse.eye(M[i].l, M[i].l)  
           
         # Handle W (state precision)  
         if M[i].W is not None:  
             if np.isscalar(M[i].W):  
                 # Convert scalar to matrix based on n dimension  
-                if M[i].n is not None and M[i].n > 0:  
+                if M[i].n > 0:  
                     M[i].W = M[i].W * sparse.eye(M[i].n, M[i].n)  
                 else:  
                     M[i].W = sparse.csr_matrix((0, 0))  
             elif sparse.issparse(M[i].W):  
                 # Already sparse, check dimensions  
-                if M[i].n is not None and (M[i].W.shape[0] != M[i].n or M[i].W.shape[1] != M[i].n):  
+                if M[i].n > 0 and (M[i].W.shape[0] != M[i].n or M[i].W.shape[1] != M[i].n):  
                     M[i].W = sparse.eye(M[i].n, M[i].n) * M[i].W[0, 0] if M[i].W.nnz > 0 else sparse.eye(M[i].n, M[i].n)  
       
     # Set estimation parameters  
-    nx = sum([level.n for level in M if level.n is not None])  
+    nx = sum([level.n for level in M])  
       
     if not hasattr(M[0], 'E') or M[0].E is None:  
         M[0].E = type('E', (), {})()  
@@ -162,26 +172,37 @@ def spm_DEM_M_set(M):
     if not hasattr(M[0].E, 'n'):  
         M[0].E.n = 6 if nx > 0 else 0  
       
-    # Check functions and set dimensions  
+    # Check functions and set dimensions - CRITICAL FIX  
     for i in range(g-1, -1, -1):  
-        if M[i].x is None and M[i].n is not None and M[i].n > 0:  
+        if M[i].x is None and M[i].n > 0:  
             M[i].x = sparse.csr_matrix((M[i].n, 1))  
           
         # Evaluate g to get dimensions  
         if hasattr(M[i].g, '__call__'):  
-            x_eval = M[i].x.toarray().flatten() if sparse.issparse(M[i].x) else M[i].x  
-            v_eval = M[i].v if M[i].v is not None else 0  
+            # Ensure we have valid inputs for evaluation  
+            x_eval = np.zeros(M[i].n) if M[i].n > 0 else np.array([0])  
+            v_eval = np.zeros(M[i].m) if M[i].m > 0 else 0  
             p_eval = M[i].pE  
               
             try:  
                 g_result = M[i].g(x_eval, v_eval, p_eval)  
                 M[i].l = len(spm_vec(g_result))  
-                M[i].n = len(spm_vec(x_eval))  
                 M[i].m = M[i].l  # For this simple case  
             except:  
-                pass  
+                # If evaluation fails, ensure l is at least 0  
+                if M[i].l is None:  
+                    M[i].l = 0  
       
-    return M  
+    # Final check to ensure no None values  
+    for i in range(g):  
+        if M[i].l is None:  
+            M[i].l = 0  
+        if M[i].m is None:  
+            M[i].m = 0  
+        if M[i].n is None:  
+            M[i].n = 0  
+      
+    return M
   
 def spm_DEM_z(M, N):  
     """Create hierarchical innovations for generating data"""  
