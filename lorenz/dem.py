@@ -99,48 +99,42 @@ def spm_cat(x, d=None, debug=False):
     if len(x) == 0:  
         return sparse.csr_matrix((0, 0))  
       
-    # Find dimensions - FIXED: Check array dimensionality  
-    max_rows = 0  
+    # Convert all items to sparse matrices and find max dimensions  
+    all_matrices = []  
     max_cols = 0  
+      
     for row in x:  
+        row_matrices = []  
         for item in row:  
             if hasattr(item, 'shape'):  
-                # Check if array has enough dimensions  
-                if len(item.shape) > 0 and item.shape[0] > 0:  
-                    max_rows = max(max_rows, item.shape[0])  
-                if len(item.shape) > 1 and item.shape[1] > 0:  
-                    max_cols = max(max_cols, item.shape[1])  
-                elif len(item.shape) == 1:  
-                    # 1D array - treat as single column  
-                    max_cols = max(max_cols, 1)  
-      
-    # If no valid matrices found, return empty  
-    if max_rows == 0 or max_cols == 0:  
-        return sparse.csr_matrix((0, 0))  
-      
-    # Fill with sparse matrices  
-    result_rows = []  
-    for row in x:  
-        row_items = []  
-        for item in row:  
-            if sparse.issparse(item) and item.nnz > 0:  
-                row_items.append(item)  
-            elif hasattr(item, 'shape') and item.shape[0] > 0:  
-                # Convert to sparse if needed  
-                if len(item.shape) == 1:  
-                    # 1D array - reshape to column  
-                    row_items.append(sparse.csr_matrix(item.reshape(-1, 1)))  
-                else:  
-                    row_items.append(sparse.csr_matrix(item))  
+                # Convert dense arrays to sparse  
+                if not sparse.issparse(item):  
+                    if item.ndim == 1:  
+                        item = item.reshape(-1, 1)  
+                    item = sparse.csr_matrix(item)  
+                  
+                # Track maximum columns  
+                if item.shape[1] > max_cols:  
+                    max_cols = item.shape[1]  
+                  
+                row_matrices.append(item)  
             else:  
-                # Create zero matrix with correct dimensions  
-                row_items.append(sparse.csr_matrix((max_rows, max_cols)))  
+                row_matrices.append(sparse.csr_matrix((0, 0)))  
           
-        if row_items:  
-            result_rows.append(sparse.hstack(row_items))  
+        all_matrices.append(row_matrices)  
       
-    if result_rows:  
-        return sparse.vstack(result_rows)  
+    # Ensure all matrices have the same number of columns  
+    for row in all_matrices:  
+        for i, item in enumerate(row):  
+            if item.shape[1] < max_cols:  
+                # Pad with zeros to match max columns  
+                padded = sparse.csr_matrix((item.shape[0], max_cols))  
+                padded[:, :item.shape[1]] = item  
+                row[i] = padded  
+      
+    # Stack rows vertically  
+    if all_matrices:  
+        return sparse.vstack([sparse.hstack(row) for row in all_matrices])  
     else:  
         return sparse.csr_matrix((0, 0))
   
