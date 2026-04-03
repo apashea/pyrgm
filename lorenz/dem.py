@@ -48,29 +48,44 @@ def spm_cat(x, d=None):
         else:  
             raise ValueError("Unknown dimension")  
       
+    # Handle empty list  
+    if not x or not x[0]:  
+        return sparse.csr_matrix((0, 0))  
+      
     # Find dimensions  
     max_rows = 0  
     max_cols = 0  
     for row in x:  
         for item in row:  
-            if hasattr(item, 'shape'):  
+            if hasattr(item, 'shape') and item.shape[0] > 0:  
                 max_rows = max(max_rows, item.shape[0])  
+            if hasattr(item, 'shape') and item.shape[1] > 0:  
                 max_cols = max(max_cols, item.shape[1])  
+      
+    # If no valid matrices found, return empty  
+    if max_rows == 0 or max_cols == 0:  
+        return sparse.csr_matrix((0, 0))  
       
     # Fill with sparse matrices  
     result_rows = []  
     for row in x:  
         row_items = []  
         for item in row:  
-            if sparse.issparse(item):  
+            if sparse.issparse(item) and item.nnz > 0:  
                 row_items.append(item)  
-            elif hasattr(item, 'shape'):  
+            elif hasattr(item, 'shape') and item.shape[0] > 0:  
                 row_items.append(sparse.csr_matrix(item))  
             else:  
-                row_items.append(sparse.csr_matrix((0, 0)))  
-        result_rows.append(sparse.hstack(row_items))  
+                # Create zero matrix with correct dimensions  
+                row_items.append(sparse.csr_matrix((max_rows, max_cols)))  
+          
+        if row_items:  # Only hstack if we have items  
+            result_rows.append(sparse.hstack(row_items))  
       
-    return sparse.vstack(result_rows)  
+    if result_rows:  
+        return sparse.vstack(result_rows)  
+    else:  
+        return sparse.csr_matrix((0, 0)) 
   
 def spm_DEM_embed(Y, n, t, dt=1, d=0):  
     """Temporal embedding into derivatives"""  
