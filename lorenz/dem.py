@@ -1,6 +1,3 @@
-Complete Python Implementation
-Here's the full pyrgm/lorenz/dem.py with exact MATLAB equivalence:
-
 import numpy as np  
 from scipy import sparse  
 from scipy.linalg import sqrtm, toeplitz, expm  
