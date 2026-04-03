@@ -2,7 +2,29 @@ import numpy as np
 from scipy import sparse  
 from scipy.linalg import sqrtm, toeplitz, expm  
 import warnings  
-  
+
+class ModelLevel:  
+    """Represents a single level in the hierarchical model"""  
+    def __init__(self):  
+        self.g = None  # y(t) = g(x,v,P)  
+        self.f = None  # dx/dt = f(x,v,P)  
+        self.pE = None  # prior expectation of parameters  
+        self.pC = None  # prior covariances of parameters  
+        self.hE = None  # prior expectation of h hyper-parameters (cause noise)  
+        self.hC = None  # prior covariances of h  
+        self.gE = None  # prior expectation of g hyper-parameters (state noise)  
+        self.gC = None  # prior covariances of g  
+        self.Q = None   # precision components (input noise)  
+        self.R = None   # precision components (state noise)  
+        self.V = None   # fixed precision (input noise)  
+        self.W = None   # fixed precision (state noise)  
+        self.m = None   # number of inputs v(i + 1)  
+        self.n = None   # number of states x(i)  
+        self.l = None   # number of output v(i)  
+        self.x = None   # hidden states  
+        self.v = None   # causal states  
+        self.E = None   # estimation parameters
+
 def _debug_print(msg, obj=None, debug=False):  
     """Helper function for debug printing"""  
     if debug:  
