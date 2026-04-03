@@ -199,8 +199,6 @@ def spm_DEM_M_custom(model, *varargs, debug=False):
   
 def spm_DEM_M_set(M, debug=False):  
     """Set indices and perform checks on hierarchical models"""  
-    _debug_print("spm_DEM_M_set input", M, debug)  
-      
     g = len(M)  
       
     # Check supra-ordinate level and add one if necessary  
@@ -208,7 +206,6 @@ def spm_DEM_M_set(M, debug=False):
         M.append(ModelLevel())  
         M[g].l = M[g-1].m if M[g-1].m is not None else 0  
         g += 1  
-        _debug_print("Added supra-ordinate level", g, debug)  
       
     M[g-1].m = 0  
     M[g-1].n = 0  
@@ -220,58 +217,75 @@ def spm_DEM_M_set(M, debug=False):
             M[i].x = sparse.csr_matrix((0, 1))  
             M[i].n = 0  
       
+    # CRITICAL: Evaluate functions to determine dimensions  
+    for i in range(g):  
+        if hasattr(M[i].g, '__call__') and M[i].x is not None:  
+            # Get dimensions from function evaluation  
+            if sparse.issparse(M[i].x):  
+                x_eval = M[i].x.toarray().flatten()  
+            else:  
+                x_eval = M[i].x  
+              
+            v_eval = np.zeros(M[i].m) if M[i].m is not None and M[i].m > 0 else 0  
+              
+            try:  
+                g_result = M[i].g(x_eval, v_eval, M[i].pE)  
+                M[i].l = len(spm_vec(g_result))  
+                _debug_print(f"Level {i} evaluated l={M[i].l} from g function", None, debug)  
+            except Exception as e:  
+                _debug_print(f"Level {i} g evaluation failed: {e}", None, debug)  
+                M[i].l = 0  
+          
+        if hasattr(M[i].f, '__call__') and M[i].x is not None:  
+            if sparse.issparse(M[i].x):  
+                x_eval = M[i].x.toarray().flatten()  
+            else:  
+                x_eval = M[i].x  
+              
+            M[i].n = len(spm_vec(x_eval))  
+            _debug_print(f"Level {i} evaluated n={M[i].n} from x", None, debug)  
+      
     # Set default values  
     for i in range(g):  
         if M[i].pE is None:  
             M[i].pE = sparse.csr_matrix((0, 0))  
         if M[i].pC is None:  
-            p = len(spm_vec(M[i].pE, debug))  
+            p = len(spm_vec(M[i].pE))  
             M[i].pC = sparse.csr_matrix((p, p))  
       
-    # Ensure dimensions are set  
+    # Handle V and W precision matrices with correct dimensions  
     for i in range(g):  
-        if M[i].l is None:  
-            M[i].l = 0  
-        if M[i].m is None:  
-            M[i].m = 0  
-        if M[i].n is None:  
-            M[i].n = 0  
-      
-    _debug_print("Dimensions after initialization", [(i, M[i].l, M[i].m, M[i].n) for i in range(g)], debug)  
-      
-    # Handle V and W precision matrices  
-    for i in range(g):  
-        _debug_print(f"Level {i} V before processing", M[i].V, debug)  
-        _debug_print(f"Level {i} W before processing", M[i].W, debug)  
-          
-        # Handle V  
+        # Handle V (input precision)  
         if M[i].V is not None:  
             if np.isscalar(M[i].V):  
                 if M[i].l > 0:  
                     M[i].V = M[i].V * sparse.eye(M[i].l, M[i].l)  
                 else:  
                     M[i].V = sparse.csr_matrix((0, 0))  
+            elif sparse.issparse(M[i].V):  
+                if M[i].l > 0 and (M[i].V.shape[0] != M[i].l or M[i].V.shape[1] != M[i].l):  
+                    M[i].V = sparse.eye(M[i].l, M[i].l) * M[i].V[0, 0] if M[i].V.nnz > 0 else sparse.eye(M[i].l, M[i].l)  
         else:  
             if M[i].l > 0:  
                 M[i].V = sparse.eye(M[i].l, M[i].l)  
             else:  
                 M[i].V = sparse.csr_matrix((0, 0))  
           
-        # Handle W  
+        # Handle W (state precision)  
         if M[i].W is not None:  
             if np.isscalar(M[i].W):  
                 if M[i].n > 0:  
                     M[i].W = M[i].W * sparse.eye(M[i].n, M[i].n)  
                 else:  
                     M[i].W = sparse.csr_matrix((0, 0))  
+            elif sparse.issparse(M[i].W):  
+                if M[i].n > 0 and (M[i].W.shape[0] != M[i].n or M[i].W.shape[1] != M[i].n):  
+                    M[i].W = sparse.eye(M[i].n, M[i].n) * M[i].W[0, 0] if M[i].W.nnz > 0 else sparse.eye(M[i].n, M[i].n)  
         else:  
             if M[i].n > 0:  
                 M[i].W = sparse.eye(M[i].n, M[i].n)  
             else:  
                 M[i].W = sparse.csr_matrix((0, 0))  
-          
-        _debug_print(f"Level {i} V after processing", M[i].V, debug)  
-        _debug_print(f"Level {i} W after processing", M[i].W, debug)  
       
     # Set estimation parameters  
     nx = sum([level.n for level in M])  
@@ -288,8 +302,7 @@ def spm_DEM_M_set(M, debug=False):
     if not hasattr(M[0].E, 'n'):  
         M[0].E.n = 6 if nx > 0 else 0  
       
-    _debug_print("spm_DEM_M_set output", M, debug)  
-    return M  
+    return M
   
 def spm_DEM_z(M, N, debug=False):  
     """Create hierarchical innovations for generating data"""  
