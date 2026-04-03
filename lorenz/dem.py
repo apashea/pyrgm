@@ -95,48 +95,21 @@ def spm_cat(x, d=None, debug=False):
         else:  
             raise ValueError("Unknown dimension")  
       
-    # Handle empty list  
-    if len(x) == 0:  
-        return sparse.csr_matrix((0, 0))  
+    # Handle cell array - MATLAB spm_cat concatenates along dimension 2 by default  
+    if all(isinstance(item, (np.ndarray, sparse.spmatrix)) for item in x):  
+        # This is a cell array of matrices - concatenate horizontally  
+        return sparse.hstack([sparse.csr_matrix(item) for item in x])  
       
-    # Convert all items to sparse matrices and find max dimensions  
-    all_matrices = []  
-    max_cols = 0  
-      
+    # Handle nested cell array structure  
+    result_rows = []  
     for row in x:  
-        row_matrices = []  
-        for item in row:  
-            if hasattr(item, 'shape'):  
-                # Convert dense arrays to sparse  
-                if not sparse.issparse(item):  
-                    if item.ndim == 1:  
-                        item = item.reshape(-1, 1)  
-                    item = sparse.csr_matrix(item)  
-                  
-                # Track maximum columns  
-                if item.shape[1] > max_cols:  
-                    max_cols = item.shape[1]  
-                  
-                row_matrices.append(item)  
-            else:  
-                row_matrices.append(sparse.csr_matrix((0, 0)))  
-          
-        all_matrices.append(row_matrices)  
+        if isinstance(row, list):  
+            row_items = [sparse.csr_matrix(item) for item in row]  
+            result_rows.append(sparse.hstack(row_items) if row_items else sparse.csr_matrix((0, 0)))  
+        else:  
+            result_rows.append(sparse.csr_matrix(row))  
       
-    # Ensure all matrices have the same number of columns  
-    for row in all_matrices:  
-        for i, item in enumerate(row):  
-            if item.shape[1] < max_cols:  
-                # Pad with zeros to match max columns  
-                padded = sparse.csr_matrix((item.shape[0], max_cols))  
-                padded[:, :item.shape[1]] = item  
-                row[i] = padded  
-      
-    # Stack rows vertically  
-    if all_matrices:  
-        return sparse.vstack([sparse.hstack(row) for row in all_matrices])  
-    else:  
-        return sparse.csr_matrix((0, 0))
+    return sparse.vstack(result_rows) if result_rows else sparse.csr_matrix((0, 0))
   
 def spm_DEM_M_custom(model, *varargs, debug=False):  
     """Create a template model structure - Python version"""  
