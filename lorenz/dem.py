@@ -61,25 +61,29 @@ def spm_vec(X, debug=False):
   
 def spm_unvec(vX, X, debug=False):  
     """Unvectorise back to original shape"""  
-    _debug_print("spm_unvec input", (vX, X), debug)  
-      
     if isinstance(X, np.ndarray):  
-        result = vX.reshape(X.shape)  
+        return vX.reshape(X.shape)  
     elif isinstance(X, list):  
         result = []  
         idx = 0  
         for item in X:  
-            if hasattr(item, 'shape'):  
-                size = np.prod(item.shape)  
+            if item is None:  
+                # Handle None values - treat as empty  
+                result.append(np.array([]))  
+            elif isinstance(item, np.ndarray):  
+                size = item.size  
+                result.append(vX[idx:idx+size].reshape(item.shape))  
+                idx += size  
+            elif isinstance(item, list):  
+                size = len(item)  
+                result.append(vX[idx:idx+size].reshape(-1, 1) if size > 0 else np.array([]))  
+                idx += size  
             else:  
-                size = len(item) if item else 0  
-            result.append(vX[idx:idx+size].reshape(item.shape if hasattr(item, 'shape') else (len(item),)))  
-            idx += size  
+                # Handle other types  
+                result.append(np.array([]))  
+        return result  
     else:  
-        result = vX  
-      
-    _debug_print("spm_unvec output", result, debug)  
-    return result  
+        return vX
   
 def spm_cat(x, d=None, debug=False):  
     """Convert a cell array into a matrix"""  
