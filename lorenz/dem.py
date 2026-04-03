@@ -247,7 +247,7 @@ def spm_DEM_M_set(M, debug=False):
             except Exception as e:  
                 _debug_print(f"Level {i} g evaluation failed: {e}", None, debug)  
                 # For Lorenz, we know l should be 1  
-                M[i].l = 1 if i == 0 else 1  # Both levels should have 1 output  
+                M[i].l = 1 if i < 2 else 0  # Both levels should have 1 output  
           
         # Ensure dimensions are set  
         if M[i].l is None:  
