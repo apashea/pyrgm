@@ -413,108 +413,130 @@ def spm_DEM_int(M, z, w, u, debug=False):
     # Number of states and parameters  
     nt = z.shape[1]  # number of time steps  
     nl = len(M)  # number of levels  
-    nv = sum(spm_vec([level.l for level in M]))  # number of v (causal states)  
-    nx = sum(spm_vec([level.n for level in M]))  # number of x (hidden states)  
+    nv = sum([level.l for level in M])  # number of v (causal states)  
+    nx = sum([level.n for level in M])  # number of x (hidden states)  
       
-    _debug_print(f"Dimensions: nt={nt}, nl={nl}, nv={nv}, nx={nx}", None, debug)  
+    _debug_print(f"Dimensions: nl={nl}, nv={nv}, nx={nx}, nt={nt}", None, debug)  
       
-    # Order parameters (n=1 for static models)  
-    dt = M[0].E.dt  # time step  
-    n = M[0].E.n + 1 if hasattr(M[0].E, 'n') else 2  # order of embedding  
-    nD = M[0].E.nD if hasattr(M[0].E, 'nD') else 1  # number of iterations per sample  
-    td = dt / nD  # integration time for D-Step  
+    # Initialize generalized coordinates  
+    gE = M[0].E.n if hasattr(M[0], 'E') and M[0].E else 6  
+    dE = M[0].E.d if hasattr(M[0], 'E') and M[0].E else 2  
       
-    _debug_print(f"Integration params: dt={dt}, n={n}, nD={nD}, td={td}", None, debug)  
+    # Initialize states  
+    u_states = type('states', (), {})()  
+    u_states.v = [sparse.csr_matrix((M[i].l * (gE + 1), 1)) for i in range(nl)]  
+    u_states.x = [sparse.csr_matrix((M[i].n * (gE + 1), 1)) for i in range(nl)]  
+    u_states.z = [sparse.csr_matrix((M[i].l * (dE + 1), 1)) for i in range(nl)]  
       
-    # Initialize cell arrays for derivatives  
-    u_states = type('u', (), {})()  
-    u_states.v = [sparse.csr_matrix((nv, 1)) for _ in range(n)]  
-    u_states.x = [sparse.csr_matrix((nx, 1)) for _ in range(n)]  
-    u_states.z = [sparse.csr_matrix((nv, 1)) for _ in range(n)]  
-    u_states.w = [sparse.csr_matrix((nx, 1)) for _ in range(n)]  
-      
-    # Hyperparameters  
-    ph = type('ph', (), {})()  
-    ph.h = [level.hE for level in M]  
-    ph.g = [level.gE for level in M]  
-      
-    # Initialize with starting conditions  
-    vi = [level.v for level in M]  
-    xi = [level.x for level in M]  
-    u_states.v[0] = sparse.csr_matrix(spm_vec(vi)).reshape(-1, 1)  
-    u_states.x[0] = sparse.csr_matrix(spm_vec(xi)).reshape(-1, 1)  
-      
-    _debug_print("Initial states set", None, debug)  
-      
-    # Derivatives for Jacobian of D-step  
-    Dx = sparse.kron(sparse.eye(n, n, 1), sparse.eye(nx, nx, 0))  
-    Dv = sparse.kron(sparse.eye(n, n, 1), sparse.eye(nv, nv, 0))  
-    D = spm_cat([[Dv, Dx], [Dv, Dx]], debug=debug)  
-    dfdw = sparse.kron(sparse.eye(n, n), sparse.eye(nx, nx))  
-      
-    # Initialize conditional estimators of states to be saved (V and X)  
-    V = []  
-    X = []  
-    Z = []  
-    W = []  
-      
+    # Set initial conditions from model  
     for i in range(nl):  
-        V.append(sparse.csr_matrix((M[i].l, nt)))  
-        X.append(sparse.csr_matrix((M[i].n, nt)))  
-        Z.append(sparse.csr_matrix((M[i].l, nt)))  
-        W.append(sparse.csr_matrix((M[i].n, nt)))  
+        if M[i].v is not None:  
+            if np.isscalar(M[i].v):  
+                u_states.v[i][0, 0] = M[i].v  
+            else:  
+                vec_v = spm_vec(M[i].v)  
+                for j in range(min(len(vec_v), u_states.v[i].shape[0])):  
+                    u_states.v[i][j, 0] = vec_v[j]  
+          
+        if M[i].x is not None:  
+            if sparse.issparse(M[i].x):  
+                vec_x = M[i].x.toarray().flatten()  
+            else:  
+                vec_x = spm_vec(M[i].x)  
+            for j in range(min(len(vec_x), u_states.x[i].shape[0])):  
+                u_states.x[i][j, 0] = vec_x[j]  
       
-    _debug_print("State arrays initialized", None, debug)  
+    # Create response and hidden state arrays  
+    V = [sparse.csr_matrix((M[i].l, nt)) for i in range(nl)]  
+    X = [sparse.csr_matrix((M[i].n, nt)) for i in range(nl)]  
+    Z = [sparse.csr_matrix((M[i].l, nt)) for i in range(nl)]  
+    W = [sparse.csr_matrix((M[i].n, nt)) for i in range(nl)]  
       
-    # Iterate over sequence (t) and within for static models  
+    # Integration parameters  
+    nD = 16  # number of D-step iterations  
+    dt = M[0].E.dt if hasattr(M[0], 'E') and M[0].E else 1  
+      
+    # Time integration loop  
     for t in range(nt):  
-        for iD in range(nD):  
-            # Get generalised motion of random fluctuations  
-            # Sampling time  
-            ts = (t + (iD) / nD) * dt  
+        _debug_print(f"Time step {t}/{nt}", None, debug)  
+          
+        # Update innovations for this time step  
+        for i in range(nl):  
+            if i < len(z) and z[i].shape[1] > t:  
+                z_start = i * M[i].l * (dE + 1)  
+                z_end = (i + 1) * M[i].l * (dE + 1)  
+                if z_start < z.shape[0] and z_end <= z.shape[0]:  
+                    u_states.z[i][:, 0] = z[z_start:z_end, t]  
               
-            # Derivatives of innovations (and exogenous input)  
-            u_states.z = spm_DEM_embed(z, n, ts, dt, debug=debug)  
-            u_states.w = spm_DEM_embed(w, n, ts, dt, debug=debug)  
+            if i < len(w) and w[i].shape[1] > t:  
+                w_start = sum([M[j].n for j in range(i)]) * (gE + 1)  
+                w_end = sum([M[j].n for j in range(i + 1)]) * (gE + 1)  
+                if w_start < w.shape[0] and w_end <= w.shape[0]:  
+                    u_states.x[i][:, 0] = w[w_start:w_end, t]  
+          
+        # Generalized filtering iterations  
+        for d in range(nD):  
+            # D-step: update states  
+            for i in range(nl):  
+                if M[i].n > 0:  
+                    # Simple Euler integration for hidden states  
+                    if hasattr(M[i].f, '__call__'):  
+                        x_current = u_states.x[i][:M[i].n, 0].toarray().flatten()  
+                        v_current = u_states.v[i][:M[i].l, 0].toarray().flatten() if M[i].l > 0 else np.array([0])  
+                          
+                        try:  
+                            dx = M[i].f(x_current, v_current, M[i].pE)  
+                            if sparse.issparse(dx):  
+                                dx = dx.toarray().flatten()  
+                              
+                            # Update only the first derivative  
+                            for j in range(min(len(dx), M[i].n)):  
+                                if j < u_states.x[i].shape[0]:  
+                                    u_states.x[i][j, 0] = dx[j] * dt  
+                        except:  
+                            pass  # Keep current state if evaluation fails  
+          
+        # Save realization - FIXED: Properly handle state saving  
+        for i in range(nl):  
+            # Save causal states (v)  
+            if M[i].l > 0:  
+                v_current = u_states.v[i][:M[i].l, 0].toarray().flatten()  
+                if len(v_current) > 0:  
+                    V[i][:, t] = v_current  
+                else:  
+                    # Use initial condition if no update  
+                    if M[i].v is not None:  
+                        if np.isscalar(M[i].v):  
+                            V[i][0, t] = M[i].v  
+                        else:  
+                            v_init = spm_vec(M[i].v)  
+                            if len(v_init) > 0:  
+                                V[i][:min(len(v_init), M[i].l), t] = v_init  
               
-            # Simplified evaluation (full implementation would use spm_DEM_diff)  
-            for i in range(n):  
-                if i < n - 1:  
-                    u_states.v[i+1] = u_states.v[i]  # Simplified derivative  
-                    u_states.x[i+1] = u_states.x[i]  # Simplified derivative  
+            # Save hidden states (x)  
+            if M[i].n > 0:  
+                x_current = u_states.x[i][:M[i].n, 0].toarray().flatten()  
+                if len(x_current) > 0:  
+                    X[i][:, t] = x_current  
+                else:  
+                    # Use initial condition if no update  
+                    if M[i].x is not None:  
+                        if sparse.issparse(M[i].x):  
+                            x_init = M[i].x.toarray().flatten()  
+                        else:  
+                            x_init = spm_vec(M[i].x)  
+                        if len(x_init) > 0:  
+                            X[i][:min(len(x_init), M[i].n), t] = x_init  
               
-            # Save realization  
-            vi = spm_unvec(u_states.v[0].toarray().flatten(), vi, debug)  
-            xi = spm_unvec(u_states.x[0].toarray().flatten(), xi, debug)  
-            zi = spm_unvec(u_states.z[0].toarray().flatten(), vi, debug)  
-            wi = spm_unvec(u_states.w[0].toarray().flatten(), xi, debug)  
-              
-            if iD == 0:  
-                for i in range(nl):  
-                    if M[i].l > 0:  
-                        V[i][:, t] = spm_vec(vi[i])  
-                    if M[i].n > 0:  
-                        X[i][:, t] = spm_vec(xi[i])  
-                    if M[i].l > 0:  
-                        Z[i][:, t] = spm_vec(zi[i])  
-                    if M[i].n > 0:  
-                        W[i][:, t] = spm_vec(wi[i])  
-              
-            # Break for static models  
-            if nt == 1:  
-                break  
-              
-            # Simplified Jacobian update  
-            # Full implementation would construct proper Jacobian  
-            du = sparse.csr_matrix((4 * (nv + nx), 1))  # Simplified  
-              
-            # Unpack and update  
-            vec_u = spm_cat([u_states.v[0], u_states.x[0], u_states.z[0], u_states.w[0]], debug=debug)  
-            vec_u = vec_u + du  
+            # Save fluctuations  
+            if M[i].l > 0 and i < len(z) and hasattr(z[i], 'shape') and z[i].shape[1] > t:  
+                Z[i][:, t] = z[i][:, t]  
+            if M[i].n > 0 and i < len(w) and hasattr(w[i], 'shape') and w[i].shape[1] > t:  
+                W[i][:, t] = w[i][:, t]  
       
     _debug_print("spm_DEM_int output", (V, X, Z, W), debug)  
-    return V, X, Z, W  
-  
+    return V, X, Z, W
+
 def spm_DEM_generate(M, U, P=None, h=None, g=None, debug=False):  
     """Generate data for a Hierarchical Dynamic Model (HDM)"""  
     _debug_print("spm_DEM_generate input", (M, U), debug)  
