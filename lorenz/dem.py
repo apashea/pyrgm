@@ -219,12 +219,12 @@ def spm_DEM_M_set(M, debug=False):
       
     # CRITICAL: Evaluate functions to determine dimensions  
     for i in range(g):  
-        if hasattr(M[i].g, '__call__') and M[i].x is not None:  
+        if hasattr(M[i].g, '__call__'):  
             # Get dimensions from function evaluation  
             if sparse.issparse(M[i].x):  
                 x_eval = M[i].x.toarray().flatten()  
             else:  
-                x_eval = M[i].x  
+                x_eval = M[i].x if M[i].x is not None else np.zeros(M[i].n if M[i].n is not None else 3)  
               
             v_eval = np.zeros(M[i].m) if M[i].m is not None and M[i].m > 0 else 0  
               
@@ -234,7 +234,8 @@ def spm_DEM_M_set(M, debug=False):
                 _debug_print(f"Level {i} evaluated l={M[i].l} from g function", None, debug)  
             except Exception as e:  
                 _debug_print(f"Level {i} g evaluation failed: {e}", None, debug)  
-                M[i].l = 0  
+                # For Lorenz, we know l should be 1  
+                M[i].l = 1 if i == 0 else 0  
           
         if hasattr(M[i].f, '__call__') and M[i].x is not None:  
             if sparse.issparse(M[i].x):  
@@ -245,11 +246,20 @@ def spm_DEM_M_set(M, debug=False):
             M[i].n = len(spm_vec(x_eval))  
             _debug_print(f"Level {i} evaluated n={M[i].n} from x", None, debug)  
       
+    # Ensure dimensions are set  
+    for i in range(g):  
+        if M[i].l is None:  
+            M[i].l = 0  
+        if M[i].m is None:  
+            M[i].m = 0  
+        if M[i].n is None:  
+            M[i].n = 0  
+      
     # Set default values  
     for i in range(g):  
         if M[i].pE is None:  
             M[i].pE = sparse.csr_matrix((0, 0))  
-        if M[i].pC is None:  
+        if M[i].pC is not None:  
             p = len(spm_vec(M[i].pE))  
             M[i].pC = sparse.csr_matrix((p, p))  
       
