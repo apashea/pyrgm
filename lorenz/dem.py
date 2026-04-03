@@ -179,7 +179,8 @@ def spm_DEM_M_custom(model, *varargs, debug=False):
             return A @ x_state / scale  
           
         M[0].f = lorenz_f  
-        M[0].g = lambda x, v, P: np.sum(x)  
+        #M[0].g = lambda x, v, P: np.sum(x)  
+        M[0].g = lambda x, v, P: np.array([np.sum(x)])
         M[0].x = x  
         M[0].pE = P  
         M[0].V = np.exp(0)  
@@ -599,7 +600,31 @@ def spm_DEM_generate(M, U, P=None, h=None, g=None, debug=False):
       
     _debug_print("DEM structure created", DEM, debug)  
     return DEM  
-  
+
+def spm_DEM_embed(Y, n, t, dt, d=0, debug=False):  
+    """Temporal embedding into derivatives"""  
+    _debug_print(f"spm_DEM_embed input: Y shape={Y[0].shape if hasattr(Y[0], 'shape') else 'N/A'}, n={n}", None, debug)  
+      
+    # Simplified implementation for data generation  
+    # Full implementation would compute temporal derivatives  
+    result = []  
+    for i in range(n):  
+        if i == 0:  
+            # Return the original values  
+            if isinstance(Y, list):  
+                result.append(Y[0] if len(Y) > 0 else sparse.csr_matrix((1, 1)))  
+            else:  
+                result.append(Y)  
+        else:  
+            # Higher-order derivatives (simplified as zeros for data generation)  
+            if isinstance(Y, list) and len(Y) > 0:  
+                result.append(sparse.csr_matrix(Y[0].shape))  
+            else:  
+                result.append(sparse.csr_matrix((1, 1)))  
+      
+    _debug_print(f"spm_DEM_embed output: {len(result)} levels", None, debug)  
+    return result
+
 # Main execution function  
 def generate_lorenz_data(debug=False):  
     """Equivalent to the MATLAB code provided"""  
