@@ -794,7 +794,7 @@ def spm_DEM_int(M, z, w, u, debug=False):
     # Set model indices and missing fields  
     M = spm_DEM_M_set(M, debug)  
       
-    # Concatenate innovations and causes - FIXED: Ensure correct dimensions  
+    # Concatenate innovations and causes  
     z_cat = spm_cat(z)  
     u_cat = spm_cat(u)  
       
@@ -949,12 +949,37 @@ def spm_DEM_int(M, z, w, u, debug=False):
             # Evaluate model and compute Jacobians  
             u_eval, dg, df = spm_DEM_diff(M, u_states)  
               
-            # Construct large Jacobian matrix  
+            # FIXED: Compute dfdw if not present  
+            if 'dw' not in df:  
+                df['dw'] = [[None for _ in range(nl-1)] for _ in range(nl-1)]  
+                for i in range(nl-1):  
+                    if M[i].f is not None:  
+                        df['dw'][i][i] = sparse.eye(M[i].n, M[i].n)  
+              
+            # FIXED: Construct large Jacobian matrix properly  
+            # Get dimensions for each block  
+            dg_dv_shape = dg['dv'][0][0].shape if dg['dv'][0][0] is not None else (0, 0)  
+            dg_dx_shape = dg['dx'][0][0].shape if dg['dx'][0][0] is not None else (0, 0)  
+            df_dv_shape = df['dv'][0][0].shape if df['dv'][0][0] is not None else (0, 0)  
+            df_dx_shape = df['dx'][0][0].shape if df['dx'][0][0] is not None else (0, 0)  
+            df_dw_shape = df['dw'][0][0].shape if df['dw'][0][0] is not None else (0, 0)  
+              
+            # Create zero blocks with correct dimensions  
+            zero_dg_dv = sparse.csr_matrix(dg_dv_shape)  
+            zero_dg_dx = sparse.csr_matrix(dg_dx_shape)  
+            zero_df_dv = sparse.csr_matrix(df_dv_shape)  
+            zero_df_dx = sparse.csr_matrix(df_dx_shape)  
+            zero_df_dw = sparse.csr_matrix(df_dw_shape)  
+              
             J = spm_cat([  
-                spm_cat([dg['dv'], dg['dx'], sparse.csr_matrix((dg['dv'][0].shape[0], dg['dv'][0].shape[1])), sparse.csr_matrix((dg['dv'][0].shape[0], dg['dv'][0].shape[1]))]),  
-                spm_cat([df['dv'], df['dx'], sparse.csr_matrix((df['dv'][0].shape[0], df['dv'][0].shape[1])), df['dw']]),  
-                spm_cat([sparse.csr_matrix((dg['dv'][0].shape[0], dg['dv'][0].shape[1])), sparse.csr_matrix((dg['dv'][0].shape[0], dg['dv'][0].shape[1])), Dv, sparse.csr_matrix((Dv.shape[0], Dv.shape[1]))]),  
-                spm_cat([sparse.csr_matrix((df['dv'][0].shape[0], df['dv'][0].shape[1])), sparse.csr_matrix((df['dv'][0].shape[0], df['dv'][0].shape[1])), sparse.csr_matrix((Dx.shape[0], Dx.shape[1])), Dx])  
+                spm_cat([spm_cat([dg['dv'][i][j] for j in range(nl-1) for i in range(nl) if dg['dv'][i][j] is not None]),  
+                        spm_cat([dg['dx'][i][j] for j in range(nl-1) for i in range(nl) if dg['dx'][i][j] is not None]),  
+                        zero_dg_dv, zero_dg_dv]),  
+                spm_cat([spm_cat([df['dv'][i][j] for j in range(nl-1) for i in range(nl-1) if df['dv'][i][j] is not None]),  
+                        spm_cat([df['dx'][i][j] for j in range(nl-1) for i in range(nl-1) if df['dx'][i][j] is not None]),  
+                        zero_df_dv, spm_cat([df['dw'][i][j] for j in range(nl-1) for i in range(nl-1) if df['dw'][i][j] is not None])]),  
+                spm_cat([zero_dg_dv, zero_dg_dx, Dv, sparse.csr_matrix((Dv.shape[0], Dv.shape[1]))]),  
+                spm_cat([zero_df_dv, zero_df_dx, sparse.csr_matrix((Dx.shape[0], Dx.shape[1])), Dx])  
             ])  
               
             # Update states using spm_dx  
