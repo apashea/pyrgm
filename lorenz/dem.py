@@ -133,21 +133,33 @@ def spm_DEM_diff(M, u, debug=False):
     n = M[0].E.n + 1 if hasattr(M[0], 'E') and M[0].E is not None else 1  
       
     # Initialize arrays for hierarchical form  
-    dg = {'dv': [[None for _ in range(nl-1)] for _ in range(nl)],  
+    dg = {'dv': [[None for _ in range(nl-1)] for _ in range(nl)],   
           'dx': [[None for _ in range(nl-1)] for _ in range(nl)],  
           'dp': [[None for _ in range(nl-1)] for _ in range(nl)]}  
-    df = {'dv': [[None for _ in range(nl-1)] for _ in range(nl)],  
-          'dx': [[None for _ in range(nl-1)] for _ in range(nl)],  
-          'dp': [[None for _ in range(nl-1)] for _ in range(nl)],  
-          'dw': [[None for _ in range(nl-1)] for _ in range(nl)]}  
+    df = {'dv': [[None for _ in range(nl-1)] for _ in range(nl-1)],   
+          'dx': [[None for _ in range(nl-1)] for _ in range(nl-1)],  
+          'dp': [[None for _ in range(nl-1)] for _ in range(nl-1)]}  
       
-    # FIXED: Template preparation - per-time-step structure  
+    # Initialize Jacobian matrices  
+    for i in range(nl - 1):  
+        for j in range(nl - 1):  
+            dg['dv'][i+1][j] = sparse.csr_matrix((M[i].m, M[i].m))  
+            dg['dx'][i+1][j] = sparse.csr_matrix((M[i].m, M[i].n))  
+            dg['dp'][i+1][j] = sparse.csr_matrix((M[i].m, M[i].p))  
+            dg['dv'][i][j] = sparse.csr_matrix((M[i].l, M[i].m))  
+            dg['dx'][i][j] = sparse.csr_matrix((M[i].l, M[i].n))  
+            dg['dp'][i][j] = sparse.csr_matrix((M[i].l, M[i].p))  
+            df['dv'][i][j] = sparse.csr_matrix((M[i].n, M[i].m))  
+            df['dx'][i][j] = sparse.csr_matrix((M[i].n, M[i].n))  
+            df['dp'][i][j] = sparse.csr_matrix((M[i].n, M[i].p))  
+      
+    # Partition states - FIXED: Use per-time-step template structure  
     vi_template = []  
     xi_template = []  
     ai_template = []  
       
     for level in M:  
-        # Handle v template - per-time-step structure  
+        # Handle v template  
         if hasattr(level, 'v') and level.v is not None:  
             if np.isscalar(level.v):  
                 vi_template.append(np.array([level.v]))  # Shape (1,) per time step  
@@ -180,40 +192,55 @@ def spm_DEM_diff(M, u, debug=False):
         else:  
             ai_template.append(np.array([]))  
       
-    _debug_print(f"Template shapes: vi={[t.shape for t in vi_template]}", None, debug)  
-    _debug_print(f"Template shapes: xi={[t.shape for t in xi_template]}", None, debug)  
+    _debug_print(f"Template shapes - vi: {[t.shape for t in vi_template]}", None, debug)  
+    _debug_print(f"Template shapes - xi: {[t.shape for t in xi_template]}", None, debug)  
       
-    # Unvectorize states  
     vi = spm_unvec(u['v'][0], vi_template)  
     xi = spm_unvec(u['x'][0], xi_template)  
     ai = spm_unvec(u['a'][0], ai_template)  
       
-    # Update u with evaluated states  
-    u['v'][0] = spm_vec(vi)  
-    u['x'][0] = spm_vec(xi)  
-    u['a'][0] = spm_vec(ai)  
-      
-    # Evaluate functions at each level  
+    # Update states using model functions  
     for i in range(nl - 1):  
-        if M[i].g is not None and M[i].f is not None:  
-            # Evaluate g and f functions  
+        if M[i].g is not None:  
             g_val = M[i].g(xi[i], vi[i+1], M[i].pE)  
-            f_val = M[i].f(xi[i], vi[i+1], M[i].pE)  
-              
-            # Store in u  
-            u['v'][i+1] = g_val  
-            u['x'][i] = f_val  
+            u['v'][i+1] = spm_vec(g_val)  
+          
+        if M[i].f is not None:  
+            f_val = M[i].f(xi[i], vi[i], M[i].pE)  
+            u['x'][i] = spm_vec(f_val)  
       
-    # Compute Jacobians (simplified)  
+    # Compute Jacobians numerically  
     for i in range(nl - 1):  
-        if M[i].g is not None and M[i].f is not None:  
-            dg['dv'][i+1][i] = sparse.csr_matrix((M[i].m, M[i].m))  
-            dg['dx'][i+1][i] = sparse.csr_matrix((M[i].m, M[i].n))  
-            df['dv'][i][i] = sparse.csr_matrix((M[i].n, M[i].m))  
-            df['dx'][i][i] = sparse.csr_matrix((M[i].n, M[i].n))  
-            df['dw'][i][i] = sparse.eye(M[i].n)  
+        if M[i].g is not None:  
+            # Compute dg/dx  
+            dg['dx'][i+1][i] = compute_jacobian(  
+                lambda x: M[i].g(x, vi[i+1], M[i].pE),   
+                xi[i], debug  
+            )  
+              
+            # Compute dg/dv  
+            dg['dv'][i+1][i] = compute_jacobian(  
+                lambda v: M[i].g(xi[i], v, M[i].pE),   
+                vi[i+1], debug  
+            )  
+              
+            # Constant term for linking causes  
+            dg['dv'][i+1][i] = -speye(M[i].m, M[i].m)  
+          
+        if M[i].f is not None:  
+            # Compute df/dx  
+            df['dx'][i][i] = compute_jacobian(  
+                lambda x: M[i].f(x, vi[i], M[i].pE),   
+                xi[i], debug  
+            )  
+              
+            # Compute df/dv  
+            df['dv'][i][i] = compute_jacobian(  
+                lambda v: M[i].f(xi[i], v, M[i].pE),   
+                vi[i], debug  
+            )  
       
-    # Concatenate Jacobians  
+    # Concatenate hierarchical forms  
     D = {}  
     D['dgdv'] = spm_cat([item for row in dg['dv'] for item in row if item is not None])  
     D['dgdx'] = spm_cat([item for row in dg['dx'] for item in row if item is not None])  
@@ -221,30 +248,22 @@ def spm_DEM_diff(M, u, debug=False):
     D['dfdx'] = spm_cat([item for row in df['dx'] for item in row if item is not None])  
       
     _debug_print("spm_DEM_diff output", D, debug)  
-    return u, D, df
+    return u, D, df  
   
-def compute_jacobian(f, x):  
+def compute_jacobian(func, x, debug=False):  
     """Compute Jacobian df/dx numerically"""  
     eps = 1e-6  
-    f0 = f(x)  
+    f0 = func(x)  
     J = np.zeros((len(f0), len(x)))  
       
     for j in range(len(x)):  
         x_eps = x.copy()  
-        if np.isscalar(x_eps):  
-            a_eps = x_eps + eps  
-        else:  
-            a_eps = x_eps.copy()  
-            a_eps[0] += eps  
-          
-        f_eps = func(a_eps)  
-          
-        if sparse.issparse(f0):  
-            dfda = (f_eps - f0) / eps  
-        else:  
-            dfda = (np.array(f_eps) - np.array(f0)) / eps  
-          
-        return dfda
+        x_eps[j] += eps  
+        f_eps = func(x_eps)  
+        J[:, j] = (f_eps - f0) / eps  
+      
+    return J
+
   
 
 def _numerical_jacobian(func, x, eps=1e-6):  
@@ -277,28 +296,27 @@ def _numerical_jacobian(func, x, eps=1e-6):
           
         return dfda
 
-def spm_dx(dfdx, f, t=None, L=None):  
+def spm_dx(dfdx, f, t=np.inf, L=None, debug=False):  
     """Returns dx(t) = (expm(dfdx*t) - I)*inv(dfdx)*f - matches MATLAB spm_dx"""  
-    nmax = 512  
-    if t is None:  
-        t = np.inf  
+    _debug_print(f"spm_dx input: dfdx shape={dfdx.shape}, t={t}", None, debug)  
       
-    # Vectorize f  
+    nmax = 512  
     xf = f  
     f = spm_vec(f)  
     n = len(f)  
       
-    # Handle regularizer  
+    # Handle t as regularizer  
     if isinstance(t, list):  
         t = t[0]  
         if np.isscalar(t):  
-            t = np.exp(t - np.log(np.linalg.det(-dfdx))/n)  
+            # Need spm_logdet - using determinant for now  
+            t = np.exp(t - np.log(np.abs(np.linalg.det(dfdx))) / n)  
         else:  
             t = np.exp(t - np.log(np.diag(-dfdx)))  
       
-    # Use pseudoinverse if t is large  
+    # Use pseudoinverse if t > exp(16)  
     if np.min(t) > np.exp(16):  
-        dx = -np.linalg.pinv(dfdx) @ f  
+        dx = -np.linalg.pinv(dfdx.toarray() if sparse.issparse(dfdx) else dfdx) @ f  
     else:  
         # Ensure t is scalar or matrix  
         if np.ndim(t) == 1:  
@@ -306,23 +324,25 @@ def spm_dx(dfdx, f, t=None, L=None):
           
         # Augment Jacobian  
         zero_block = sparse.csr_matrix((1, 1))  
+        tf_block = sparse.csr_matrix(t * f.reshape(-1, 1))  
+        tdfdx_block = sparse.csr_matrix(t * dfdx)  
+          
         J = spm_cat([[zero_block, None],  
-                     [t * f, t * dfdx]])  
+                     [tf_block, tdfdx_block]])  
           
         # Solve using matrix exponential  
         if n <= nmax:  
             dx = expm(J.toarray())  
             dx = dx[:, 0]  
         else:  
-            # Use Krylov subspace method for large matrices  
-            from scipy.sparse.linalg import expv  
-            x = sparse.csr_matrix(([1], ([0], [0])), shape=(n+1, 1))  
-            dx = expv(1, J, x)  
+            # For large matrices, would need expv implementation  
+            # Using scipy's expm for now  
+            dx = expm(J.toarray())  
+            dx = dx[:, 0]  
           
         # Recover update  
         dx = dx[1:]  
       
-    # Unvectorize result  
     dx = spm_unvec(np.real(dx), xf)  
     return dx
 
@@ -1108,65 +1128,62 @@ def spm_DEM_generate(M, U, P=None, h=None, g=None, debug=False):
     _debug_print("DEM structure created", DEM, debug)  
     return DEM  
 
-def spm_DEM_embed(Y, n, t, dt, d=0, debug=False):  
+def spm_DEM_embed(Y, n, t, dt=1, d=0, debug=False):  
     """Temporal embedding into derivatives - matches MATLAB spm_DEM_embed"""  
-    _debug_print(f"spm_DEM_embed input: Y shape={Y.shape if hasattr(Y, 'shape') else 'N/A'}, n={n}, t={t}", None, debug)  
+    _debug_print(f"spm_DEM_embed input: Y shape={Y.shape}, n={n}, t={t}", None, debug)  
       
     # Handle sparse matrix input  
     if sparse.issparse(Y):  
-        Y_dense = Y.toarray()  
-    else:  
-        Y_dense = Y  
+        Y = Y.toarray()  
       
     # Ensure Y is 2D  
-    if Y_dense.ndim == 1:  
-        Y_dense = Y_dense.reshape(-1, 1)  
+    if Y.ndim == 1:  
+        Y = Y.reshape(-1, 1)  
       
-    ny, nt = Y_dense.shape  
+    q, N = Y.shape  
+    y = [sparse.csr_matrix((q, 1)) for _ in range(n)]  
       
-    # Initialize result for each derivative order  
-    result = []  
+    if q == 0:  
+        return y  
       
-    # For each derivative order (0 to n-1)  
-    for i in range(n):  
-        if i == 0:  
-            # Zeroth derivative - just the values at time t  
-            if t <= nt:  
-                result.append(sparse.csr_matrix(Y_dense[:, min(t-1, nt-1)].reshape(-1, 1)))  
-            else:  
-                result.append(sparse.csr_matrix((ny, 1)))  
-        else:  
-            # Higher derivatives - compute using finite differences  
-            if t > i:  
-                # Use backward differences for derivatives  
-                y_vals = Y_dense[:, t-i-1:t].T  
-                if y_vals.shape[0] >= i+1:  
-                    # Compute i-th derivative using finite differences  
-                    deriv = np.zeros(ny)  
-                    for j in range(ny):  
-                        # Simple finite difference approximation  
-                        if i == 1:  
-                            # First derivative  
-                            deriv[j] = (Y_dense[j, t-1] - Y_dense[j, t-2]) / dt if t > 1 else 0  
-                        elif i == 2:  
-                            # Second derivative  
-                            if t > 2:  
-                                deriv[j] = (Y_dense[j, t-1] - 2*Y_dense[j, t-2] + Y_dense[j, t-3]) / (dt**2)  
-                            else:  
-                                deriv[j] = 0  
-                        else:  
-                            # Higher derivatives - set to 0 for now  
-                            deriv[j] = 0  
-                      
-                    result.append(sparse.csr_matrix(deriv.reshape(-1, 1)))  
+    # Convert d to list if scalar  
+    if np.isscalar(d):  
+        d = [d]  
+      
+    # Loop over channels  
+    for p in range(len(d)):  
+        # Boundary conditions  
+        s = (t - d[p]) / dt  
+        k = (np.arange(1, n+1)) + np.fix(s - (n + 1) / 2)  
+        x = s - np.min(k) + 1  
+          
+        # Handle boundaries  
+        k[k < 1] = 1  
+        k[k > N] = N  
+          
+        # Inverse embedding operator T (Taylor expansion)  
+        T = np.zeros((n, n))  
+        for i in range(n):  
+            for j in range(n):  
+                if j == 0:  
+                    T[i, j] = 1  
                 else:  
-                    result.append(sparse.csr_matrix((ny, 1)))  
-            else:  
-                # Not enough history for this derivative  
-                result.append(sparse.csr_matrix((ny, 1)))  
+                    T[i, j] = ((i - x) * dt) ** (j - 1) / np.prod(range(1, j))  
+          
+        # Embedding operator E  
+        E = np.linalg.inv(T)  
+          
+        # Embed  
+        if len(d) == q:  
+            for i in range(n):  
+                y[i][p, :] = sparse.csr_matrix(Y[p, k.astype(int)] @ E[i, :].T)  
+        else:  
+            for i in range(n):  
+                y[i] = sparse.csr_matrix(Y[:, k.astype(int)] @ E[i, :].T)  
+            return y  
       
-    _debug_print(f"spm_DEM_embed output: {len(result)} derivative orders", None, debug)  
-    return result
+    _debug_print(f"spm_DEM_embed output: {len(y)} derivatives", None, debug)  
+    return y
 
 def spm_kron(A, B):  
     """Kronecker tensor product with sparse outputs - matches MATLAB spm_kron"""  
