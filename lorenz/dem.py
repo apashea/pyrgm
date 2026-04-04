@@ -785,7 +785,7 @@ def spm_DEM_int(M, z, w, u, debug=False):
             elif sparse.issparse(M[i].v):  
                 vi.append(M[i].v)  
             else:  
-                vi.append(np.array(M[i].v]))  
+                vi.append(np.array(M[i].v))  
         else:  
             vi.append(sparse.csr_matrix((M[i].l, 1)))  
               
