@@ -756,7 +756,7 @@ def spm_DEM_int(M, z, w, u, debug=False):
             pad_rows = nv - u_cat.shape[0]  
             u_cat = sparse.vstack([u_cat, sparse.csr_matrix((pad_rows, u_cat.shape[1]))])  
       
-    z_cat = z_cat + u_cat  
+    # Concatenate w  
     w_cat = spm_cat(w)  
       
     # Ensure w_cat has correct dimensions  
@@ -773,65 +773,31 @@ def spm_DEM_int(M, z, w, u, debug=False):
     nt = z_cat.shape[1]  # number of time steps  
     nl = len(M)          # number of levels  
       
-    # FIXED: Construct precision matrices as block diagonal  
-    _debug_print("Constructing precision matrices", None, debug)  
+    _debug_print(f"Integration parameters: nt={nt}, nl={nl}", None, debug)  
       
-    # Build Sz from V matrices (causal state precisions)  
-    V_blocks = []  
-    for i in range(nl):  
-        if hasattr(M[i], 'V') and M[i].V is not None and M[i].l > 0:  
-            V_blocks.append(M[i].V)  
-        else:  
-            V_blocks.append(sparse.csr_matrix((M[i].l, M[i].l)))  
-      
-    Sz = _block_diag(V_blocks)  
-    _debug_print(f"Sz.shape={Sz.shape} from {len(V_blocks)} V blocks", None, debug)  
-      
-    # Build Sw from W matrices (hidden state precisions)  
-    W_blocks = []  
-    for i in range(nl):  
-        if hasattr(M[i], 'W') and M[i].W is not None and M[i].n > 0:  
-            W_blocks.append(M[i].W)  
-        else:  
-            W_blocks.append(sparse.csr_matrix((M[i].n, M[i].n)))  
-      
-    Sw = _block_diag(W_blocks)  
-    _debug_print(f"Sw.shape={Sw.shape} from {len(W_blocks)} W blocks", None, debug)  
-      
-    # Order parameters  
-    dt = M[0].E.dt  
-    n = M[0].E.n + 1  # order of embedding  
-    nD = M[0].E.nD if hasattr(M[0].E, 'nD') else 1  # iterations per sample  
-    td = dt / nD  
-      
-    _debug_print(f"Integration parameters: dt={dt}, n={n}, nD={nD}, td={td}", None, debug)  
-      
-    # Initialize generalized states  
-    u_states = {}  
-    u_states['v'] = [sparse.csr_matrix((nv, 1)) for _ in range(n)]  
-    u_states['x'] = [sparse.csr_matrix((nx, 1)) for _ in range(n)]  
-    u_states['z'] = [sparse.csr_matrix((nv, 1)) for _ in range(n)]  
-    u_states['w'] = [sparse.csr_matrix((nx, 1)) for _ in range(n)]  
-      
-    # Set initial conditions  
+    # Initialize template variables - FIXED: Convert scalars to arrays  
     vi = []  
     xi = []  
     for i in range(nl):  
         if M[i].v is not None:  
-            if sparse.issparse(M[i].v):  
-                vi.append(M[i].v.toarray().flatten())  
-            else:  
+            if np.isscalar(M[i].v):  
+                vi.append(np.array([M[i].v]))  
+            elif sparse.issparse(M[i].v):  
                 vi.append(M[i].v)  
+            else:  
+                vi.append(np.array(M[i].v]))  
         else:  
-            vi.append(np.array([]))  
-          
+            vi.append(sparse.csr_matrix((M[i].l, 1)))  
+              
         if M[i].x is not None:  
             if sparse.issparse(M[i].x):  
-                xi.append(M[i].x.toarray().flatten())  
-            else:  
                 xi.append(M[i].x)  
+            else:  
+                xi.append(np.array(M[i].x]))  
         else:  
-            xi.append(np.array([]))  
+            xi.append(sparse.csr_matrix((M[i].n, 1)))  
+      
+    _debug_print(f"Template initialized: vi has {len(vi)} levels, xi has {len(xi)} levels", None, debug)  
       
     # Initialize response and hidden states  
     V = []  
@@ -844,52 +810,89 @@ def spm_DEM_int(M, z, w, u, debug=False):
         X.append(sparse.csr_matrix((M[i].n, nt)))  
         Z.append(sparse.csr_matrix((M[i].l, nt)))  
         W.append(sparse.csr_matrix((M[i].n, nt)))  
+          
+        # Initial conditions  
+        if M[i].v is not None:  
+            if sparse.issparse(M[i].v):  
+                V[i][:, 0] = M[i].v.toarray().flatten()  
+            else:  
+                V[i][:, 0] = M[i].v  
+        if M[i].x is not None:  
+            if sparse.issparse(M[i].x):  
+                X[i][:, 0] = M[i].x.toarray().flatten()  
+            else:  
+                X[i][:, 0] = M[i].x  
+      
+    # Embedding parameters  
+    if hasattr(M[0], 'E') and M[0].E is not None:  
+        n = M[0].E.n + 1  
+        dt = M[0].E.dt  
+        nD = M[0].E.d  
+    else:  
+        n = 1  
+        dt = 1  
+        nD = 1  
+      
+    td = dt / nD  
+      
+    _debug_print(f"Embedding parameters: dt={dt}, n={n}, nD={nD}, td={td}", None, debug)  
+      
+    # Precision matrices - FIXED: Use block diagonal construction  
+    V_mats = [level.V for level in M if hasattr(level, 'V') and level.V is not None]  
+    W_mats = [level.W for level in M if hasattr(level, 'W') and level.W is not None]  
+      
+    Sz = _block_diag(V_mats) if V_mats else sparse.csr_matrix((nv, nv))  
+    Sw = _block_diag(W_mats) if W_mats else sparse.csr_matrix((nx, nx))  
+      
+    _debug_print(f"Precision matrices: Sz.shape={Sz.shape}, Sw.shape={Sw.shape}", None, debug)  
       
     # Derivative operators for Jacobian  
     Dx = spm_kron(speye(n, n, 1), speye(nx, nx, 0))  
     Dv = spm_kron(speye(n, n, 1), speye(nv, nv, 0))  
     D = spm_cat([Dv, Dx, Dv, Dx])  
-    dfdw = spm_kron(np.eye(n), np.eye(nx))  
       
-    _debug_print(f"Precision matrices: Sz.shape={Sz.shape}, Sw.shape={Sw.shape}", None, debug)  
     _debug_print(f"Derivative operators: Dx.shape={Dx.shape}, Dv.shape={Dv.shape}", None, debug)  
+      
+    # Initialize generalized states  
+    u_states = {  
+        'v': [sparse.csr_matrix((M[i].l, nt)) for i in range(nl)],  
+        'x': [sparse.csr_matrix((M[i].n, nt)) for i in range(nl)],  
+        'z': [sparse.csr_matrix((M[i].l, nt)) for i in range(nl)],  
+        'w': [sparse.csr_matrix((M[i].n, nt)) for i in range(nl)]  
+    }  
       
     # Time integration loop  
     for t in range(nt):  
         _debug_print(f"Time step {t}/{nt}", None, debug)  
           
-        # Get current time  
-        ts = t  
+        # Initialize states at time t  
+        for i in range(nl):  
+            if M[i].l > 0:  
+                u_states['v'][i][:, t] = V[i][:, t]  
+            if M[i].n > 0:  
+                u_states['x'][i][:, t] = X[i][:, t]  
           
-        # Temporal embedding of innovations  
-        u_states['z'] = spm_DEM_embed(Sz * z_cat, n, ts, dt)  
-        u_states['w'] = spm_DEM_embed(Sw * w_cat, n, ts, dt)  
-          
-        # Initialize states for this time step  
-        if t == 0:  
-            # First time step - use initial conditions  
-            u_states['v'][0] = sparse.csr_matrix(spm_vec(vi))  
-            u_states['x'][0] = sparse.csr_matrix(spm_vec(xi))  
-          
-        # Multiple iterations for convergence (D-step)  
+        # Multiple iterations for convergence (generalized filtering)  
         for iD in range(nD):  
-            # Evaluate functions and derivatives  
-            # This is a simplified version - full implementation needs spm_DEM_diff  
-            dg = {'dv': sparse.csr_matrix((1, 1)), 'dx': sparse.csr_matrix((1, 3))}  
-            df = {'dv': sparse.csr_matrix((3, 1)), 'dx': sparse.csr_matrix((3, 3))}  
+            # Temporal embedding of innovations  
+            u_states['z'] = spm_DEM_embed(Sz * z_cat, n, t, dt)  
+            u_states['w'] = spm_DEM_embed(Sw * w_cat, n, t, dt)  
               
-            # Tensor products for Jacobian  
-            dgdv = spm_kron(speye(n, n, 1), dg['dv'])  
-            dgdx = spm_kron(speye(n, n, 1), dg['dx'])  
-            dfdv = spm_kron(speye(n, n, 0), df['dv'])  
-            dfdx = spm_kron(speye(n, n, 0), df['dx'])  
+            # Evaluate model and compute Jacobians  
+            u_eval, dg, df = spm_DEM_diff(M, u_states)  
               
+            # Construct large Jacobian matrix  
             J = spm_cat([  
-                [dgdv, dgdx, Dv, None],  
-                [dfdv, dfdx, None, dfdw],  
-                [None, None, Dv, None],  
-                [None, None, None, Dx]  
+                spm_cat([dg['dv'], dg['dx'], sparse.csr_matrix((dg['dv'][0].shape[0], dg['dv'][0].shape[1])), sparse.csr_matrix((dg['dv'][0].shape[0], dg['dv'][0].shape[1]))]),  
+                spm_cat([df['dv'], df['dx'], sparse.csr_matrix((df['dv'][0].shape[0], df['dv'][0].shape[1])), df['dw']]),  
+                spm_cat([sparse.csr_matrix((dg['dv'][0].shape[0], dg['dv'][0].shape[1])), sparse.csr_matrix((dg['dv'][0].shape[0], dg['dv'][0].shape[1])), Dv, sparse.csr_matrix((Dv.shape[0], Dv.shape[1]))]),  
+                spm_cat([sparse.csr_matrix((df['dv'][0].shape[0], df['dv'][0].shape[1])), sparse.csr_matrix((df['dv'][0].shape[0], df['dv'][0].shape[1])), sparse.csr_matrix((Dx.shape[0], Dx.shape[1])), Dx])  
             ])  
+              
+            # Update states using spm_dx  
+            du = spm_dx(J, D * spm_vec(u_states), td)  
+            u_vec = spm_vec(u_states) + du  
+            u_states = spm_unvec(u_vec, u_states)  
               
             # Save realization (first iteration only)  
             if iD == 0:  
@@ -905,14 +908,9 @@ def spm_DEM_int(M, z, w, u, debug=False):
                     if M[i].n > 0:  
                         X[i][:, t] = spm_vec(xi[i])  
                         W[i][:, t] = spm_vec(wi[i])  
-              
-            # Update states using spm_dx  
-            du = spm_dx(J, D * spm_vec(u_states), td)  
-            u_vec = spm_vec(u_states) + du  
-            u_states = spm_unvec(u_vec, u_states)  
       
     _debug_print("spm_DEM_int output", (V, X, Z, W), debug)  
-    return V, X, Z, W  
+    return V, X, Z, W
   
 def _block_diag(matrices):  
     """Create block diagonal matrix from list of matrices"""  
