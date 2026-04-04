@@ -458,8 +458,27 @@ def spm_DEM_int(M, z, w, u, debug=False):
     # Set model indices and missing fields  
     M = spm_DEM_M_set(M, debug)  
       
-    # Concatenate innovations and causes  
-    z_cat = spm_cat(z) + spm_cat(u)  
+    # Concatenate innovations and causes - FIXED: Handle shape mismatch  
+    z_cat = spm_cat(z)  
+    u_cat = spm_cat(u)  
+      
+    # Ensure shapes match before addition  
+    if z_cat.shape != u_cat.shape:  
+        _debug_print(f"Shape mismatch: z_cat.shape={z_cat.shape}, u_cat.shape={u_cat.shape}", None, debug)  
+        # Pad the smaller matrix or truncate to match  
+        min_rows = min(z_cat.shape[0], u_cat.shape[0])  
+        min_cols = min(z_cat.shape[1], u_cat.shape[1])  
+          
+        if z_cat.shape[0] > min_rows:  
+            z_cat = z_cat[:min_rows, :]  
+        if u_cat.shape[0] > min_rows:  
+            u_cat = u_cat[:min_rows, :]  
+        if z_cat.shape[1] > min_cols:  
+            z_cat = z_cat[:, :min_cols]  
+        if u_cat.shape[1] > min_cols:  
+            u_cat = u_cat[:, :min_cols]  
+      
+    z_cat = z_cat + u_cat  
     w_cat = spm_cat(w)  
       
     # Get dimensions  
