@@ -136,19 +136,17 @@ def spm_DEM_diff(M, u, debug=False):
     dg = {'dv': [[None for _ in range(nl-1)] for _ in range(nl)],  
           'dx': [[None for _ in range(nl-1)] for _ in range(nl)],  
           'dp': [[None for _ in range(nl-1)] for _ in range(nl)]}  
-    df = {'dv': [[None for _ in range(nl-1)] for _ in range(nl-1)],  
-          'dx': [[None for _ in range(nl-1)] for _ in range(nl-1)],  
-          'dp': [[None for _ in range(nl-1)] for _ in range(nl-1)]}  
+    df = {'dv': [[None for _ in range(nl-1)] for _ in range(nl)],  
+          'dx': [[None for _ in range(nl-1)] for _ in range(nl)],  
+          'dp': [[None for _ in range(nl-1)] for _ in range(nl)]}  
       
-    # Partition states - FIXED: Use per-time-step template structure  
-    temp_dim = u['v'][0].shape[0] if hasattr(u['v'][0], 'shape') else 1  
-      
+    # Partition states - FIXED: Convert scalars to arrays in templates  
     vi_template = []  
     xi_template = []  
     ai_template = []  
       
     for level in M:  
-        # Handle v template - per-time-step structure  
+        # Handle v template  
         if hasattr(level, 'v') and level.v is not None:  
             if np.isscalar(level.v):  
                 vi_template.append(np.array([level.v]))  # Shape (1,) per time step  
@@ -157,27 +155,32 @@ def spm_DEM_diff(M, u, debug=False):
             else:  
                 vi_template.append(np.array(level.v))  
         else:  
-            vi_template.append(sparse.csr_matrix((level.l, 1)))  
+            vi_template.append(np.array([]))  
           
-        # Handle x template - per-time-step structure  
+        # Handle x template  
         if hasattr(level, 'x') and level.x is not None:  
-            if sparse.issparse(level.x):  
+            if np.isscalar(level.x):  
+                xi_template.append(np.array([level.x]))  
+            elif sparse.issparse(level.x):  
                 xi_template.append(level.x)  
             else:  
                 xi_template.append(np.array(level.x))  
         else:  
-            xi_template.append(sparse.csr_matrix((level.n, 1)))  
+            xi_template.append(np.array([]))  
           
-        # Handle a template - per-time-step structure  
+        # Handle a template  
         if hasattr(level, 'a') and level.a is not None:  
-            if sparse.issparse(level.a):  
+            if np.isscalar(level.a):  
+                ai_template.append(np.array([level.a]))  
+            elif sparse.issparse(level.a):  
                 ai_template.append(level.a)  
             else:  
                 ai_template.append(np.array(level.a))  
         else:  
-            ai_template.append(sparse.csr_matrix((0, 1)))  
+            ai_template.append(np.array([]))  
       
-    _debug_print(f"Template shapes: vi[0]={vi_template[0].shape if vi_template else 'N/A'}", None, debug)  
+    _debug_print(f"Template shapes: vi={[t.shape for t in vi_template]}", None, debug)  
+    _debug_print(f"Template shapes: xi={[t.shape for t in xi_template]}", None, debug)  
       
     vi = spm_unvec(u['v'][0], vi_template)  
     xi = spm_unvec(u['x'][0], xi_template)  
@@ -189,20 +192,59 @@ def spm_DEM_diff(M, u, debug=False):
             u['v'][i] = spm_vec(vi[i])  
         if M[i].n > 0:  
             u['x'][i] = spm_vec(xi[i])  
-        if hasattr(M[i], 'a') and M[i].l > 0:  
+        if M[i].k > 0:  
             u['a'][i] = spm_vec(ai[i])  
       
-    # Evaluate functions and compute derivatives  
+    # Evaluate generative process for each level  
     for i in range(nl - 1):  
-        if M[i].g is not None:  
-            g_val = M[i].g(xi[i], vi[i+1], M[i].pE)  
-            dg['dv'][i+1][i] = compute_jacobian(lambda v: M[i].g(xi[i], v, M[i].pE), vi[i+1])  
-            dg['dx'][i+1][i] = compute_jacobian(lambda x: M[i].g(x, vi[i+1], M[i].pE), xi[i])  
-          
-        if M[i].f is not None:  
+        if i == 0:  
+            # Level 0: Lorenz dynamics  
+            g_val = M[i].g(xi[i], vi[i], M[i].pE)  
             f_val = M[i].f(xi[i], vi[i], M[i].pE)  
-            df['dv'][i][i] = compute_jacobian(lambda v: M[i].f(xi[i], v, M[i].pE), vi[i])  
-            df['dx'][i][i] = compute_jacobian(lambda x: M[i].f(x, vi[i], M[i].pE), xi[i])  
+        else:  
+            # Higher levels: identity mappings  
+            g_val = vi[i]  
+            f_val = np.zeros_like(xi[i])  
+          
+        # Store in u structure  
+        u['g'][i] = g_val  
+        u['f'][i] = f_val  
+      
+    # Compute Jacobians numerically  
+    for i in range(nl - 1):  
+        # Get current states  
+        if i == 0:  
+            x_curr = xi[i]  
+            v_curr = vi[i]  
+            p_curr = M[i].pE  
+        else:  
+            x_curr = xi[i] if len(xi[i]) > 0 else np.array([0])  
+            v_curr = vi[i] if len(vi[i]) > 0 else np.array([0])  
+            p_curr = M[i].pE if hasattr(M[i], 'pE') and M[i].pE is not None else np.array([])  
+          
+        # Compute dg/dx  
+        if M[i].n > 0 and M[i].l > 0:  
+            dg_dx = compute_jacobian(lambda x: M[i].g(x, v_curr, p_curr), x_curr)  
+            dg.dv[i][i] = sparse.csr_matrix(dg_dx)  
+          
+        # Compute dg/dv  
+        if M[i].m > 0 and M[i].l > 0:  
+            dg_dv = compute_jacobian(lambda v: M[i].g(x_curr, v, p_curr), v_curr)  
+            dg.dv[i][i] = sparse.csr_matrix(dg_dv)  
+          
+        # Compute df/dx  
+        if M[i].n > 0:  
+            df_dx = compute_jacobian(lambda x: M[i].f(x, v_curr, p_curr), x_curr)  
+            df.dx[i][i] = sparse.csr_matrix(df_dx)  
+          
+        # Compute df/dv  
+        if M[i].m > 0:  
+            df_dv = compute_jacobian(lambda v: M[i].f(x_curr, v, p_curr), v_curr)  
+            df.dv[i][i] = sparse.csr_matrix(df_dv)  
+          
+        # Constant terms for linking causes  
+        if i < nl - 1:  
+            dg.dv[i+1][i] = -speye(M[i].m, M[i].m)  
       
     # Concatenate hierarchical forms  
     D = {}  
@@ -214,15 +256,10 @@ def spm_DEM_diff(M, u, debug=False):
     _debug_print("spm_DEM_diff output", D, debug)  
     return u, D, df  
   
-def compute_jacobian(func, x):  
+def compute_jacobian(f, x):  
     """Compute Jacobian df/dx numerically"""  
     eps = 1e-6  
-    f0 = func(x)  
-    if sparse.issparse(f0):  
-        f0 = f0.toarray().flatten()  
-    else:  
-        f0 = np.array(f0)  
-      
+    f0 = f(x)  
     J = np.zeros((len(f0), len(x)))  
       
     for j in range(len(x)):  
@@ -242,6 +279,7 @@ def compute_jacobian(func, x):
           
         return dfda
   
+
 def _numerical_jacobian(func, x, eps=1e-6):  
     """Compute numerical Jacobian"""  
     if sparse.issparse(x):  
