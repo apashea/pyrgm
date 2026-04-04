@@ -1128,23 +1128,82 @@ def spm_DEM_generate(M, U, P=None, h=None, g=None, debug=False):
     _debug_print("DEM structure created", DEM, debug)  
     return DEM  
 
-def spm_DEM_embed(Y, n, t, dt=1, d=0, debug=False):  
+def spm_DEM_embed(Y, n, t, dt, d=0, debug=False):  
     """Temporal embedding into derivatives - matches MATLAB spm_DEM_embed"""  
-    _debug_print(f"spm_DEM_embed input: Y shape={Y.shape}, n={n}, t={t}", None, debug)  
+    _debug_print(f"spm_DEM_embed input: Y shape={Y.shape if hasattr(Y, 'shape') else 'N/A'}, n={n}, t={t}", None, debug)  
       
     # Handle sparse matrix input  
     if sparse.issparse(Y):  
-        Y = Y.toarray()  
+        Y_dense = Y.toarray()  
+    else:  
+        Y_dense = Y  
       
     # Ensure Y is 2D  
-    if Y.ndim == 1:  
-        Y = Y.reshape(-1, 1)  
+    if Y_dense.ndim == 1:  
+        Y_dense = Y_dense.reshape(-1, 1)  
       
-    q, N = Y.shape  
-    y = [sparse.csr_matrix((q, 1)) for _ in range(n)]  
+    ny, nt = Y_dense.shape  
       
-    if q == 0:  
-        return y  
+    # Initialize output  
+    y = []  
+      
+    # Create Taylor expansion matrix for derivatives  
+    # Using the approach from MATLAB's spm_DEM_embed  
+    T = np.zeros((n, n))  
+    for i in range(n):  
+        for j in range(i, n):  
+            if i == j:  
+                T[i, j] = 1.0  
+            else:  
+                T[i, j] = (dt**(j-i)) / np.math.factorial(j-i)  
+      
+    _debug_print(f"Taylor matrix T shape: {T.shape}, condition number: {np.linalg.cond(T):.2e}", None, debug)  
+      
+    # Check if T is singular or ill-conditioned  
+    if np.linalg.cond(T) > 1e12:  
+        _debug_print("Taylor matrix is ill-conditioned, using pseudo-inverse", None, debug)  
+        E = np.linalg.pinv(T)  
+    else:  
+        try:  
+            E = np.linalg.inv(T)  
+        except np.linalg.LinAlgError:  
+            _debug_print("Taylor matrix is singular, using pseudo-inverse", None, debug)  
+            E = np.linalg.pinv(T)  
+      
+    # Embed each time series  
+    for i in range(ny):  
+        y_i = []  
+          
+        for ti in range(nt):  
+            # Get local neighborhood for derivative computation  
+            t_start = max(0, ti - n + 1)  
+            t_end = min(nt, ti + n)  
+              
+            # Extract local segment  
+            if t_end - t_start >= n:  
+                Y_local = Y_dense[i, t_start:t_start+n]  
+            else:  
+                # Pad with zeros if at boundary  
+                Y_local = np.zeros(n)  
+                actual_len = t_end - t_start  
+                Y_local[:actual_len] = Y_dense[i, t_start:t_end]  
+              
+            # Compute derivatives using embedding operator  
+            if sparse.issparse(Y):  
+                derivative = sparse.csr_matrix(E @ Y_local)  
+            else:  
+                derivative = E @ Y_local  
+              
+            y_i.append(derivative)  
+          
+        # Stack derivatives for this time series  
+        if sparse.issparse(Y):  
+            y.append(sparse.hstack(y_i))  
+        else:  
+            y.append(np.column_stack(y_i))  
+      
+    _debug_print(f"spm_DEM_embed output: {len(y)} derivative levels", None, debug)  
+    return y
       
     # Convert d to list if scalar  
     if np.isscalar(d):  
