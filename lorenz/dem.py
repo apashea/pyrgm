@@ -1,7 +1,8 @@
 import numpy as np  
 from scipy import sparse  
 from scipy.linalg import sqrtm, toeplitz, expm  
-import warnings  
+import warnings
+import math
 
 class ModelLevel:  
     """Represents a single level in the hierarchical model"""  
@@ -1155,7 +1156,7 @@ def spm_DEM_embed(Y, n, t, dt, d=0, debug=False):
             if i == j:  
                 T[i, j] = 1.0  
             else:  
-                T[i, j] = (dt**(j-i)) / np.math.factorial(j-i)  
+                T[i, j] = (dt**(j-i)) / math.factorial(j-i)  
       
     _debug_print(f"Taylor matrix T shape: {T.shape}, condition number: {np.linalg.cond(T):.2e}", None, debug)  
       
