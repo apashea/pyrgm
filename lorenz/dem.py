@@ -1145,53 +1145,47 @@ def spm_DEM_embed(Y, n, t, dt, d=0, debug=False):
       
     ny, nt = Y_dense.shape  
       
-    # Initialize output with n derivative orders (FIXED: was ny)  
+    # Initialize output with n derivative orders  
     y = [sparse.csr_matrix((ny, nt)) for _ in range(n)]  
       
     # Create Taylor expansion matrix for derivatives  
     # Using the approach from MATLAB's spm_DEM_embed  
     T = np.zeros((n, n))  
+      
+    # Build Taylor matrix - FIXED: Handle negative indices properly  
     for i in range(n):  
         for j in range(n):  
             if i == j:  
                 T[i, j] = 1.0  
-            else:  
+            elif j > i:  
                 T[i, j] = (dt**(j-i)) / math.factorial(j-i)  
+            else:  
+                T[i, j] = 0.0  # j < i, mathematically zero  
       
     _debug_print(f"Taylor matrix T shape: {T.shape}, condition number: {np.linalg.cond(T):.2e}", None, debug)  
       
-    # Handle singular matrix  
-    if np.linalg.cond(T) > 1e12:  
-        _debug_print("Using pseudo-inverse due to singular matrix", None, debug)  
-        E = np.linalg.pinv(T)  
-    else:  
+    # Invert Taylor matrix with pseudo-inverse for numerical stability  
+    try:  
         E = np.linalg.inv(T)  
+    except np.linalg.LinAlgError:  
+        _debug_print("Taylor matrix is singular, using pseudo-inverse", None, debug)  
+        E = np.linalg.pinv(T)  
       
     # Embed derivatives for each time point  
     for p in range(ny):  
-        for t_idx in range(nt):  
-            # Get neighborhood around current time point  
-            k = np.array([t_idx + d]) if isinstance(d, (int, np.integer)) else np.array([t_idx + d[p]])  
+        # Get time series for this output  
+        y_p = Y_dense[p, :]  
+          
+        # Apply embedding operator  
+        for i in range(n):  
+            # Compute i-th derivative using embedding matrix  
+            derivative = np.zeros(nt)  
+            for j in range(n):  
+                if j < len(y_p):  
+                    derivative += E[i, j] * y_p[j] if j < nt else 0  
               
-            # Ensure indices are within bounds  
-            k = np.clip(k, 0, nt - 1)  
-              
-            # Extract local time series  
-            if len(k) == n:  
-                Y_local = Y[p, k.astype(int)]  
-            else:  
-                # Pad with edge values if not enough points  
-                Y_local = np.zeros(n)  
-                Y_local[:len(k)] = Y[p, k.astype(int)]  
-                if len(k) < n:  
-                    Y_local[len(k):] = Y[p, k[-1]]  
-              
-            # Compute derivatives using embedding operator  
-            derivatives = E @ Y_local  
-              
-            # Store each derivative order  
-            for i in range(n):  
-                y[i][p, t_idx] = derivatives[i]  
+            # Store as sparse matrix  
+            y[i][p, :] = derivative  
       
     _debug_print(f"spm_DEM_embed output: {len(y)} derivatives", None, debug)  
     return y
