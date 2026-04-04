@@ -42,49 +42,281 @@ def _debug_print(msg, obj=None, debug=False):
                 print(f" | Type: {type(obj).__name__} | Value: {obj}", end="")  
         print()  
   
-def spm_vec(X, debug=False):  
-    """Vectorise a numeric, cell or structure array"""  
-    _debug_print("spm_vec input", X, debug)  
-      
-    if isinstance(X, np.ndarray):  
-        result = X.ravel()  
-    elif isinstance(X, list):  
-        result = []  
-        for item in X:  
-            result.extend(spm_vec(item, debug))  
-        result = np.array(result)  
-    else:  
-        result = np.array([])  
-      
-    _debug_print("spm_vec output", result, debug)  
-    return result  
+
   
-def spm_unvec(vX, X, debug=False):  
-    """Unvectorise back to original shape"""  
-    if isinstance(X, np.ndarray):  
-        return vX.reshape(X.shape)  
-    elif isinstance(X, list):  
+def spm_vec(X, *args):  
+    """Vectorise a numeric, cell or structure array - matches MATLAB spm_vec"""  
+    if args:  
+        X = [X] + list(args)  
+      
+    if isinstance(X, (np.ndarray, list)):  
+        if isinstance(X, list):  
+            # Handle list of arrays  
+            result = []  
+            for item in X:  
+                if sparse.issparse(item):  
+                    result.append(item.toarray().flatten())  
+                elif isinstance(item, np.ndarray):  
+                    result.append(item.flatten())  
+                else:  
+                    result.append(np.array([item]).flatten())  
+            return np.concatenate(result)  
+        else:  
+            # Single array  
+            if sparse.issparse(X):  
+                return X.toarray().flatten()  
+            else:  
+                return X.flatten()  
+    elif isinstance(X, dict):  
+        # Handle structure-like dict  
+        result = []  
+        for key in sorted(X.keys()):  
+            result.append(spm_vec(X[key]))  
+        return np.concatenate(result)  
+    else:  
+        return np.array([])
+
+def spm_unvec(vX, template):  
+    """Unvectorise a vectorised array - matches MATLAB spm_unvec"""  
+    if isinstance(template, list):  
+        # Handle cell array template  
         result = []  
         idx = 0  
-        for item in X:  
-            if item is None:  
-                # Handle None values - treat as empty  
-                result.append(np.array([]))  
-            elif isinstance(item, np.ndarray):  
-                size = item.size  
-                result.append(vX[idx:idx+size].reshape(item.shape))  
-                idx += size  
-            elif isinstance(item, list):  
-                size = len(item)  
-                result.append(vX[idx:idx+size].reshape(-1, 1) if size > 0 else np.array([]))  
-                idx += size  
+        for item in template:  
+            if hasattr(item, 'shape'):  
+                n = np.prod(item.shape)  
             else:  
-                # Handle other types  
-                result.append(np.array([]))  
+                n = 1  
+            if sparse.issparse(item):  
+                new_item = sparse.csr_matrix(vX[idx:idx+n].reshape(item.shape))  
+            else:  
+                new_item = vX[idx:idx+n].reshape(item.shape)  
+            result.append(new_item)  
+            idx += n  
+        return result  
+    elif isinstance(template, dict):  
+        # Handle structure template  
+        result = {}  
+        idx = 0  
+        for key in sorted(template.keys()):  
+            item = template[key]  
+            if hasattr(item, 'shape'):  
+                n = np.prod(item.shape)  
+            else:  
+                n = 1  
+            if sparse.issparse(item):  
+                result[key] = sparse.csr_matrix(vX[idx:idx+n].reshape(item.shape))  
+            else:  
+                result[key] = vX[idx:idx+n].reshape(item.shape)  
+            idx += n  
         return result  
     else:  
-        return vX
-  
+        # Single array  
+        if sparse.issparse(template):  
+            return sparse.csr_matrix(vX.reshape(template.shape))  
+        else:  
+            return vX.reshape(template.shape)
+
+
+
+def spm_DEM_diff(M, u, debug=False):  
+    """Evaluate an active model given innovations - matches MATLAB spm_DEM_diff"""  
+    _debug_print("spm_DEM_diff input", None, debug)  
+      
+    # Check for action (ADEM)  
+    try:  
+        M[0].a  
+        ADEM = True  
+    except:  
+        u['a'] = u['v']  
+        for level in M:  
+            level.a = sparse.csr_matrix((0, 1))  
+            level.k = 0  
+        for level in u['a']:  
+            level = sparse.csr_matrix((0, 1))  
+        ADEM = False  
+      
+    nl = len(M)  # number of levels  
+    n = M[0].E.n + 1  # order of embedding  
+      
+    # Initialize derivative arrays  
+    dg = {'dv': [], 'dx': [], 'da': []}  
+    df = {'dv': [], 'dx': [], 'da': []}  
+      
+    # Partition states  
+    vi = spm_unvec(u['v'][0], [level.v for level in M])  
+    xi = spm_unvec(u['x'][0], [level.x for level in M])  
+    ai = spm_unvec(u['a'][0], [level.a for level in M])  
+    zi = spm_unvec(u['z'][0], [level.v for level in M])  
+      
+    # Derivatives for Jacobian  
+    vi[nl-1] = zi[nl-1]  
+    gi = []  
+    fi = []  
+      
+    for i in range(nl-1, -1, -1):  
+        # Evaluate derivatives using numerical differentiation  
+        if ADEM:  
+            # With action states  
+            dgdx, g = spm_diff(M[i].g, xi[i], vi[i+1], ai[i+1], M[i].pE, 1)  
+            dfdx, f = spm_diff(M[i].f, xi[i], vi[i+1], ai[i+1], M[i].pE, 1)  
+            dgdv = spm_diff(M[i].g, xi[i], vi[i+1], ai[i+1], M[i].pE, 2)  
+            dfdv = spm_diff(M[i].f, xi[i], vi[i+1], ai[i+1], M[i].pE, 2)  
+            dgda = spm_diff(M[i].g, xi[i], vi[i+1], ai[i+1], M[i].pE, 3)  
+            dfda = spm_diff(M[i].f, xi[i], vi[i+1], ai[i+1], M[i].pE, 3)  
+        else:  
+            # Without action states  
+            dgdx, g = spm_diff(M[i].g, xi[i], vi[i+1], M[i].pE, 1)  
+            dfdx, f = spm_diff(M[i].f, xi[i], vi[i+1], M[i].pE, 1)  
+            dgdv = spm_diff(M[i].g, xi[i], vi[i+1], M[i].pE, 2)  
+            dfdv = spm_diff(M[i].f, xi[i], vi[i+1], M[i].pE, 2)  
+            dgda = sparse.csr_matrix((M[i].l, M[i].k)) if hasattr(M[i], 'k') else sparse.csr_matrix((M[i].l, 0))  
+            dfda = sparse.csr_matrix((M[i].n, M[i].k)) if hasattr(M[i], 'k') else sparse.csr_matrix((M[i].n, 0))  
+          
+        gi.append(g)  
+        fi.append(f)  
+        vi[i] = spm_vec(g) + spm_vec(zi[i])  
+          
+        # Store derivatives (simplified - need proper cell array structure)  
+        if i < nl-1:  
+            dg['dx'].append(dgdx)  
+            dg['dv'].append(dgdv)  
+            dg['da'].append(dgda)  
+            df['dx'].append(dfdx)  
+            df['dv'].append(dfdv)  
+            df['da'].append(dfda)  
+      
+    # Concatenate hierarchical arrays  
+    dg['dx'] = spm_cat(dg['dx'])  
+    dg['dv'] = spm_cat(dg['dv'])  
+    dg['da'] = spm_cat(dg['da'])  
+    df['dx'] = spm_cat(df['dx'])  
+    df['dv'] = spm_cat(df['dv'])  
+    df['da'] = spm_cat(df['da'])  
+      
+    # Update generalized coordinates  
+    u['v'][0] = spm_vec(vi)  
+    u['x'][1] = spm_vec(fi) + u['w'][0]  
+      
+    for i in range(1, n-1):  
+        u['v'][i] = dg['dv'] * u['v'][i] + dg['dx'] * u['x'][i] + dg['da'] * u['a'][i] + u['z'][i]  
+        u['x'][i+1] = df['dv'] * u['v'][i] + df['dx'] * u['x'][i] + df['da'] * u['a'][i] + u['w'][i]  
+      
+    return u, dg, df
+
+def spm_dx(dfdx, f, t=None, L=None):  
+    """Returns dx(t) = (expm(dfdx*t) - I)*inv(dfdx)*f - matches MATLAB spm_dx"""  
+    nmax = 512  
+    if t is None:  
+        t = np.inf  
+      
+    # Vectorize f  
+    xf = f  
+    f = spm_vec(f)  
+    n = len(f)  
+      
+    # Handle regularizer  
+    if isinstance(t, list):  
+        t = t[0]  
+        if np.isscalar(t):  
+            t = np.exp(t - np.log(np.linalg.det(-dfdx))/n)  
+        else:  
+            t = np.exp(t - np.log(np.diag(-dfdx)))  
+      
+    # Use pseudoinverse if t is large  
+    if np.min(t) > np.exp(16):  
+        dx = -np.linalg.pinv(dfdx) @ f  
+    else:  
+        # Ensure t is scalar or matrix  
+        if np.ndim(t) == 1:  
+            t = np.diag(t)  
+          
+        # Augment Jacobian  
+        zero_block = sparse.csr_matrix((1, 1))  
+        J = spm_cat([[zero_block, None],  
+                     [t * f, t * dfdx]])  
+          
+        # Solve using matrix exponential  
+        if n <= nmax:  
+            dx = expm(J.toarray())  
+            dx = dx[:, 0]  
+        else:  
+            # Use Krylov subspace method for large matrices  
+            from scipy.sparse.linalg import expv  
+            x = sparse.csr_matrix(([1], ([0], [0])), shape=(n+1, 1))  
+            dx = expv(1, J, x)  
+          
+        # Recover update  
+        dx = dx[1:]  
+      
+    # Unvectorize result  
+    dx = spm_unvec(np.real(dx), xf)  
+    return dx
+
+def spm_diff(func, *args, n=1):  
+    """Numerical differentiation - simplified version of MATLAB spm_diff"""  
+    eps = 1e-6  
+      
+    if n == 1:  
+        # Derivative with respect to first argument  
+        x = args[0]  
+        f0 = func(x, *args[1:])  
+          
+        if np.isscalar(x):  
+            x_eps = x + eps  
+        else:  
+            x_eps = x.copy()  
+            x_eps[0] += eps  
+          
+        f_eps = func(x_eps, *args[1:])  
+          
+        if sparse.issparse(f0):  
+            dfdx = (f_eps - f0) / eps  
+        else:  
+            dfdx = (np.array(f_eps) - np.array(f0)) / eps  
+          
+        return dfdx, f0  
+      
+    elif n == 2:  
+        # Derivative with respect to second argument  
+        v = args[1]  
+        f0 = func(args[0], v, *args[2:])  
+          
+        if np.isscalar(v):  
+            v_eps = v + eps  
+        else:  
+            v_eps = v.copy()  
+            v_eps[0] += eps  
+          
+        f_eps = func(args[0], v_eps, *args[2:])  
+          
+        if sparse.issparse(f0):  
+            dfdv = (f_eps - f0) / eps  
+        else:  
+            dfdv = (np.array(f_eps) - np.array(f0)) / eps  
+          
+        return dfdv  
+      
+    elif n == 3:  
+        # Derivative with respect to third argument  
+        a = args[2]  
+        f0 = func(args[0], args[1], a, *args[3:])  
+          
+        if np.isscalar(a):  
+            a_eps = a + eps  
+        else:  
+            a_eps = a.copy()  
+            a_eps[0] += eps  
+          
+        f_eps = func(args[0], args[1], a_eps, *args[3:])  
+          
+        if sparse.issparse(f0):  
+            dfda = (f_eps - f0) / eps  
+        else:  
+            dfda = (np.array(f_eps) - np.array(f0)) / eps  
+          
+        return dfda
+
 def spm_cat(x, d=None, debug=False):  
     """Concatenate matrices from cell array - matches MATLAB spm_cat behavior"""  
     _debug_print(f"spm_cat input: {type(x)}", None, debug)  
