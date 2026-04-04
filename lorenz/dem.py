@@ -97,12 +97,16 @@ def spm_cat(x, d=None, debug=False):
     if d is not None:  
         _debug_print(f"spm_cat: dimension argument {d} not implemented", None, debug)  
       
-    # Convert all to sparse matrices  
+    # Convert all to sparse matrices - FIXED: Check if already sparse  
     matrices = []  
     for item in x:  
         if item is None:  
             matrices.append(sparse.csr_matrix((0, 0)))  
+        elif sparse.issparse(item):  
+            # Already sparse, just ensure CSR format  
+            matrices.append(item.tocsr())  
         else:  
+            # Convert to sparse  
             matrices.append(sparse.csr_matrix(item))  
       
     if not matrices:  
