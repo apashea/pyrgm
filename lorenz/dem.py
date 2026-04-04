@@ -521,7 +521,7 @@ def spm_DEM_M_custom(model, debug=False, *varargs):
         M[1].V = np.exp(16)  # High precision  
         M[1].n = 0  
         M[1].m = 1  
-        M[1].l = 0  
+        M[1].l = 1  
         M[1].p = 0  # FIXED: no parameters at this level  
           
         # Level 3: Top level (for completeness)  
