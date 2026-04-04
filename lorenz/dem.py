@@ -430,57 +430,72 @@ def spm_cat(x, d=None, debug=False):
     if d is not None:  
         _debug_print(f"spm_cat: dimension argument {d} not implemented", None, debug)  
       
-    # Convert all to sparse matrices - FIXED: Handle type checking properly  
-    matrices = []  
+    # Filter out empty matrices  
+    filtered_x = []  
     for item in x:  
-        if item is None:  
-            matrices.append(sparse.csr_matrix((0, 0)))  
-        elif sparse.issparse(item):  
-            # Already sparse, just ensure CSR format  
-            matrices.append(item.tocsr())  
+        if hasattr(item, 'shape'):  
+            if item.shape[0] > 0 and item.shape[1] > 0:  
+                filtered_x.append(item)  
+        else:  
+            # Handle scalars  
+            filtered_x.append(item)  
+      
+    _debug_print(f"spm_cat: filtered {len(x)} items to {len(filtered_x)} non-empty items", None, debug)  
+      
+    if not filtered_x:  
+        # All matrices were empty  
+        return sparse.csr_matrix((0, 0))  
+      
+    # Convert all to sparse matrices  
+    matrices = []  
+    for item in filtered_x:  
+        if sparse.issparse(item):  
+            matrices.append(item)  
         elif isinstance(item, np.ndarray):  
-            # Handle numpy arrays  
-            if item.size == 0:  
-                matrices.append(sparse.csr_matrix(item.shape))  
-            else:  
+            if item.size > 0:  
                 matrices.append(sparse.csr_matrix(item))  
         else:  
-            # Handle other types (scalars, etc.)  
-            try:  
-                # Convert to numpy array first to avoid boolean evaluation  
-                item_array = np.array(item)  
-                if item_array.size == 0:  
-                    matrices.append(sparse.csr_matrix((0, 0)))  
-                else:  
-                    matrices.append(sparse.csr_matrix(item_array))  
-            except:  
-                matrices.append(sparse.csr_matrix((0, 0)))  
+            # Handle scalars  
+            matrices.append(sparse.csr_matrix(np.array([[item]])))  
       
     if not matrices:  
         return sparse.csr_matrix((0, 0))  
       
-    # Find dimensions for each row and column (MATLAB approach)  
-    # For our simple list case, treat as single row  
-    max_cols = max(m.shape[1] for m in matrices)  
+    # Find max dimensions  
     max_rows = max(m.shape[0] for m in matrices)  
+    max_cols = max(m.shape[1] for m in matrices)  
       
-    # Pad matrices to have same dimensions  
+    # Pad matrices to match dimensions  
     padded_matrices = []  
     for m in matrices:  
-        if m.shape[1] < max_cols or m.shape[0] < max_rows:  
-            # Pad with zeros  
-            padded = sparse.lil_matrix((max_rows, max_cols))  
-            padded[:m.shape[0], :m.shape[1]] = m  
-            padded_matrices.append(padded.tocsr())  
+        rows, cols = m.shape  
+        if rows < max_rows or cols < max_cols:  
+            # Create padding  
+            pad_rows = max_rows - rows  
+            pad_cols = max_cols - cols  
+              
+            if rows == 0:  
+                # Empty row matrix  
+                padded = sparse.csr_matrix((max_rows, cols))  
+            elif cols == 0:  
+                # Empty column matrix  
+                padded = sparse.csr_matrix((rows, max_cols))  
+            else:  
+                # Non-empty matrix, pad with zeros  
+                padded = sparse.vstack([  
+                    sparse.hstack([m, sparse.csr_matrix((rows, pad_cols))]),  
+                    sparse.csr_matrix((pad_rows, max_cols))  
+                ])  
+            padded_matrices.append(padded)  
         else:  
             padded_matrices.append(m)  
       
-    # Concatenate vertically (equivalent to MATLAB's cat(1, y{:}))  
+    # Concatenate vertically  
     try:  
         result = sparse.vstack(padded_matrices)  
     except:  
         # Fallback to dense if sparse fails  
-        dense_matrices = [m.toarray() for m in padded_matrices]  
+        dense_matrices = [m.toarray() if sparse.issparse(m) else m for m in padded_matrices]  
         result = np.vstack(dense_matrices)  
         result = sparse.csr_matrix(result)  
       
