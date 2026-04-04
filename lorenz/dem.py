@@ -480,7 +480,7 @@ def spm_cat(x, d=None, debug=False):
     _debug_print(f"spm_cat output shape: {result.shape}", None, debug)  
     return result
   
-def spm_DEM_custom(model, debug=False, *varargs):  
+def spm_DEM_M_custom(model, debug=False, *varargs):  
     """Custom model creation for Python implementation"""  
     _debug_print(f"spm_DEM_custom input: {model}", None, debug)  
       
