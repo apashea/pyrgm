@@ -77,26 +77,29 @@ def spm_vec(X, *args):
         return np.array([])
 
 def spm_unvec(vX, template):  
-    """Unvectorise a vector into a cell array - matches MATLAB spm_unvec"""  
-    _debug_print(f"spm_unvec: vX.shape={vX.shape if hasattr(vX, 'shape') else 'N/A'}", None, False)  
-    _debug_print(f"spm_unvec: template shapes={[item.shape for item in template]}", None, False)  
-      
-    if not isinstance(template, list):  
-        return vX  
-      
+    """Unvectorise a vectorised array - matches MATLAB spm_unvec"""  
     result = []  
     idx = 0  
+      
     for i, item in enumerate(template):  
         if sparse.issparse(item):  
             n = item.shape[0] * item.shape[1]  
+        elif hasattr(item, 'shape'):  
+            n = np.prod(item.shape)  
         else:  
-            n = item.size  
+            n = 1  
           
         _debug_print(f"spm_unvec: item {i}, n={n}, idx={idx}, idx+n={idx+n}", None, False)  
           
-        if idx + n > len(vX):  
-            _debug_print(f"spm_unvec: WARNING idx+n ({idx+n}) > len(vX) ({len(vX)})", None, False)  
-            n = len(vX) - idx  
+        # FIXED: Use shape[0] instead of len() for sparse matrices  
+        if sparse.issparse(vX):  
+            total_elements = vX.shape[0]  
+        else:  
+            total_elements = len(vX)  
+              
+        if idx + n > total_elements:  
+            _debug_print(f"spm_unvec: WARNING idx+n ({idx+n}) > total_elements ({total_elements})", None, False)  
+            n = total_elements - idx  
           
         if sparse.issparse(item):  
             new_item = sparse.csr_matrix(vX[idx:idx+n].reshape(item.shape))  
@@ -106,7 +109,6 @@ def spm_unvec(vX, template):
         idx += n  
       
     return result
-
 
 
 def spm_DEM_diff(M, u, debug=False):  
