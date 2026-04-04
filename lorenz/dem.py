@@ -521,7 +521,9 @@ def spm_DEM_int(M, z, w, u, debug=False):
                     v_state = V[i][:, t].toarray().flatten() if V[i][:, t].nnz > 0 else np.zeros(M[i].l)  
                     x_new = M[i].f(x_state, v_state, M[i].pE)  
                     if isinstance(x_new, np.ndarray) and x_new.size > 0:  
-                        X[i][:, t+1] = X[i][:, t] + dt * x_new  
+                        # FIXED: Reshape x_new to column vector to match sparse matrix shape  
+                        x_new_col = x_new.reshape(-1, 1)  
+                        X[i][:, t+1] = X[i][:, t] + dt * x_new_col  
                         if i < len(w) and w[i] is not None and hasattr(w[i], 'shape') and w[i].shape[1] > t:  
                             if sparse.issparse(w[i]):  
                                 w_col = w[i][:, t].toarray().flatten()  
