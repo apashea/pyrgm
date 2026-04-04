@@ -86,38 +86,55 @@ def spm_unvec(vX, X, debug=False):
         return vX
   
 def spm_cat(x, d=None, debug=False):  
-    """Convert a cell array into a matrix"""  
+    """Concatenate matrices from cell array - matches MATLAB spm_cat behavior"""  
+    _debug_print(f"spm_cat input: {type(x)}", None, debug)  
+      
+    # If not a cell array, return as is  
     if not isinstance(x, list):  
         return x  
       
+    # Handle dimension argument (not used in our current implementation)  
     if d is not None:  
-        # Concatenate over specific dimension  
-        if d == 1:  
-            return sparse.vstack([spm_cat(col) for col in x])  
-        elif d == 2:  
-            return sparse.hstack([spm_cat(row) for row in x])  
-        else:  
-            raise ValueError("Unknown dimension")  
+        _debug_print(f"spm_cat: dimension argument {d} not implemented", None, debug)  
       
-    # Handle empty list  
-    if len(x) == 0:  
+    # Convert all to sparse matrices  
+    matrices = []  
+    for item in x:  
+        if item is None:  
+            matrices.append(sparse.csr_matrix((0, 0)))  
+        else:  
+            matrices.append(sparse.csr_matrix(item))  
+      
+    if not matrices:  
         return sparse.csr_matrix((0, 0))  
       
-    # Check if this is a simple cell array (like w) that needs vertical stacking  
-    if all(isinstance(item, (np.ndarray, sparse.spmatrix)) for item in x):  
-        # For w matrices, stack vertically (along rows)  
-        return sparse.vstack([sparse.csr_matrix(item) for item in x])  
+    # Find dimensions for each row and column (MATLAB approach)  
+    # For our simple list case, treat as single row  
+    max_cols = max(m.shape[1] for m in matrices)  
+    max_rows = max(m.shape[0] for m in matrices)  
       
-    # Handle nested cell array structure  
-    result_rows = []  
-    for row in x:  
-        if isinstance(row, list):  
-            row_items = [sparse.csr_matrix(item) for item in row]  
-            result_rows.append(sparse.hstack(row_items) if row_items else sparse.csr_matrix((0, 0)))  
+    # Pad matrices to have same dimensions  
+    padded_matrices = []  
+    for m in matrices:  
+        if m.shape[1] < max_cols or m.shape[0] < max_rows:  
+            # Pad with zeros  
+            padded = sparse.lil_matrix((max_rows, max_cols))  
+            padded[:m.shape[0], :m.shape[1]] = m  
+            padded_matrices.append(padded.tocsr())  
         else:  
-            result_rows.append(sparse.csr_matrix(row))  
+            padded_matrices.append(m)  
       
-    return sparse.vstack(result_rows) if result_rows else sparse.csr_matrix((0, 0))
+    # Concatenate vertically (equivalent to MATLAB's cat(1, y{:}))  
+    try:  
+        result = sparse.vstack(padded_matrices)  
+    except:  
+        # Fallback to dense if sparse fails  
+        dense_matrices = [m.toarray() for m in padded_matrices]  
+        result = np.vstack(dense_matrices)  
+        result = sparse.csr_matrix(result)  
+      
+    _debug_print(f"spm_cat output shape: {result.shape}", None, debug)  
+    return result
   
 def spm_DEM_M_custom(model, debug=False, *varargs):  
     """Custom model creation for Python implementation"""  
