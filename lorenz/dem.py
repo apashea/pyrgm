@@ -480,9 +480,9 @@ def spm_cat(x, d=None, debug=False):
     _debug_print(f"spm_cat output shape: {result.shape}", None, debug)  
     return result
   
-def spm_DEM_M_custom(model, debug=False, *varargs):  
+def spm_DEM_custom(model, debug=False, *varargs):  
     """Custom model creation for Python implementation"""  
-    _debug_print(f"spm_DEM_M_custom input: {model}", None, debug)  
+    _debug_print(f"spm_DEM_custom input: {model}", None, debug)  
       
     if model == 'Lorenz':  
         # Create hierarchical model  
@@ -496,60 +496,46 @@ def spm_DEM_M_custom(model, debug=False, *varargs):
         M[0].x = np.array([0.9, 0.8, 30.0])  # Initial states  
           
         # FIXED: Set initial causal state to match MATLAB (v=31.7)  
-        M[0].v = 31.7  
+        M[0].v = 31.7  # Initial causal state  
           
-        # Define dynamics functions  
-        def lorenz_f(x_state, v, P_params):  
-            """Lorenz dynamics: dx/dt = f(x,v,P)"""  
-            # Ensure x_state is 1D  
-            if hasattr(x_state, 'flatten'):  
-                x_state = x_state.flatten()  
-              
-            A = np.array([[-P_params[0], P_params[0], 0],      
-                         [P_params[2] - x_state[2], -1, -x_state[0]],  
-                         [x_state[1], x_state[0], P_params[1]]])  
-            return A @ x_state  
-          
-        def lorenz_g(x_state, v, P_params):  
-            """Lorenz output: y = sum(x)"""  
-            # Ensure x_state is 1D  
-            if hasattr(x_state, 'flatten'):  
-                x_state = x_state.flatten()  
-            # FIXED: Return 1D array to match MATLAB behavior  
-            return np.array([np.sum(x_state)])  
-          
+        # Set functions  
         M[0].f = lorenz_f  
         M[0].g = lorenz_g  
           
-        # FIXED: Precision matrices as proper sparse matrices  
-        M[0].V = sparse.csr_matrix(np.array([[1.0]]))  # V = 1.0  
-        M[0].W = sparse.csr_matrix(np.exp(16) * np.eye(3))  # W = 8886110.520508 * I(3)  
-          
-        # Level 2: Static observation level  
-        M.append(ModelLevel())  
-        M[1].g = lambda x, v, P: np.array([0])  # Fixed output  
-        M[1].f = None  # No dynamics  
-          
-        # FIXED: Level 2 precision matrix as sparse matrix  
-        M[1].V = sparse.csr_matrix(np.array([[np.exp(16)]]))  # V = 8886110.520508  
-          
         # Set dimensions  
-        M[0].n = 3  # 3 states for Lorenz  
-        M[0].l = 1  # 1 output  
-        M[0].m = 1  # 1 input  
+        M[0].n = 3  # hidden states (x, y, z)  
+        M[0].m = 1  # outputs (y)  
+        M[0].l = 1  # inputs (v)  
+        M[0].p = 3  # FIXED: number of parameters (sigma, rho, beta)  
           
-        M[1].n = 0  # No states  
-        M[1].l = 1  # 1 output      
-        M[1].m = 0  # No inputs  
+        # Level 2: Hidden causes  
+        M.append(ModelLevel())  
+        M[1].v = 0.0  # No hidden causes  
+        M[1].V = np.exp(16)  # High precision  
+        M[1].n = 0  
+        M[1].m = 1  
+        M[1].l = 0  
+        M[1].p = 0  # FIXED: no parameters at this level  
           
-    else:  
-        raise ValueError(f"Unknown model: {model}")  
+        # Level 3: Top level (for completeness)  
+        M.append(ModelLevel())  
+        M[2].v = 0.0  
+        M[2].V = np.exp(16)  
+        M[2].n = 0  
+        M[2].m = 0  
+        M[2].l = 0  
+        M[2].p = 0  # FIXED: no parameters at this level  
+          
+        _debug_print(f"spm_DEM_custom before M_set | Type: {type(M)} | Length: {len(M)}", None, debug)  
+          
+        # Set model structure  
+        M = spm_DEM_M_set(M, debug)  
+          
+        _debug_print(f"spm_DEM_custom output | Type: {type(M)} | Length: {len(M)}", None, debug)  
+        return M  
       
-    _debug_print("spm_DEM_M_custom before M_set", M, debug)  
-    result = spm_DEM_M_set(M, debug=debug)  
-    _debug_print("spm_DEM_M_custom output", result, debug)  
-    return result
-
+    else:  
+        raise ValueError(f"Unknown model: {model}")
 
 def spm_DEM_M_set(M, debug=False):  
     """Set indices and perform checks on hierarchical models"""  
