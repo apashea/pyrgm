@@ -158,60 +158,71 @@ def spm_DEM_diff(M, u, debug=False):
     nl = len(M)  
     n = M[0].E.n + 1 if hasattr(M[0], 'E') and M[0].E is not None else 1  
       
-    # Initialize arrays for Jacobians  
-    dg = {'dv': [[None for _ in range(nl-1)] for _ in range(nl)],  
-          'dx': [[None for _ in range(nl-1)] for _ in range(nl)],  
-          'dp': [[None for _ in range(nl-1)] for _ in range(nl)]}  
+    # Initialize Jacobian structures  
+    dg = {'dv': [[None for _ in range(nl-1)] for _ in range(n+1)],  
+          'dx': [[None for _ in range(nl-1)] for _ in range(n+1)],  
+          'dp': [[None for _ in range(nl-1)] for _ in range(n+1)]}  
     df = {'dv': [[None for _ in range(nl-1)] for _ in range(nl-1)],  
           'dx': [[None for _ in range(nl-1)] for _ in range(nl-1)],  
-          'dp': [[None for _ in range(nl-1)] for _ in range(nl-1)],  
-          'dw': [[None for _ in range(nl-1)] for _ in range(nl-1)]}  
+          'dp': [[None for _ in range(nl-1)] for _ in range(nl-1)]}  
       
-    # FIXED: Handle empty causal states in template preparation  
+    # Initialize Jacobian matrices  
+    for i in range(nl-1):  
+        for j in range(nl-1):  
+            dg['dv'][i+1][j] = sparse.csr_matrix((M[i].m, M[i].m))  
+            dg['dx'][i+1][j] = sparse.csr_matrix((M[i].m, M[i].n))  
+            dg['dp'][i+1][j] = sparse.csr_matrix((M[i].m, M[i].p))  
+            dg['dv'][i][j] = sparse.csr_matrix((M[i].l, M[i].m))  
+            dg['dx'][i][j] = sparse.csr_matrix((M[i].l, M[i].n))  
+            dg['dp'][i][j] = sparse.csr_matrix((M[i].l, M[i].p))  
+            df['dv'][i][j] = sparse.csr_matrix((M[i].n, M[i].m))  
+            df['dx'][i][j] = sparse.csr_matrix((M[i].n, M[i].n))  
+            df['dp'][i][j] = sparse.csr_matrix((M[i].n, M[i].p))  
+      
+    # Partition states - FIXED: Use 2D shapes for sparse matrices  
     vi_template = []  
     xi_template = []  
     ai_template = []  
       
-    # Calculate total causal states  
-    total_nv = sum([level.l for level in M])  
-      
     for level in M:  
-        # Handle v template - skip if no causal states  
-        if total_nv > 0 and hasattr(level, 'v') and level.v is not None:  
+        # Handle v template  
+        if hasattr(level, 'v') and level.v is not None:  
             if np.isscalar(level.v):  
-                vi_template.append(np.array([level.v]))  # Shape (1,) per time step  
+                vi_template.append(np.array([[level.v]]))  # 2D shape (1,1)  
             elif sparse.issparse(level.v):  
                 vi_template.append(level.v)  
             else:  
                 vi_template.append(np.array(level.v))  
         else:  
-            # No causal states - add empty template  
-            vi_template.append(np.array([]))  
+            vi_template.append(sparse.csr_matrix((0, 0)))  
           
         # Handle x template  
         if hasattr(level, 'x') and level.x is not None:  
             if np.isscalar(level.x):  
-                xi_template.append(np.array([level.x]))  
+                xi_template.append(np.array([[level.x]]))  # 2D shape (1,1)  
             elif sparse.issparse(level.x):  
                 xi_template.append(level.x)  
             else:  
                 xi_template.append(np.array(level.x))  
         else:  
-            xi_template.append(np.array([]))  
+            xi_template.append(sparse.csr_matrix((0, 0)))  
           
         # Handle a template  
         if hasattr(level, 'a') and level.a is not None:  
             if np.isscalar(level.a):  
-                ai_template.append(np.array([level.a]))  
+                ai_template.append(np.array([[level.a]]))  # 2D shape (1,1)  
             elif sparse.issparse(level.a):  
                 ai_template.append(level.a)  
             else:  
                 ai_template.append(np.array(level.a))  
         else:  
-            ai_template.append(np.array([]))  
+            ai_template.append(sparse.csr_matrix((0, 0)))  
       
-    _debug_print(f"Template shapes - vi: {[t.shape for t in vi_template]}", None, debug)  
-    _debug_print(f"Template shapes - xi: {[t.shape for t in xi_template]}", None, debug)  
+    total_nv = sum([level.l for level in M])  
+    total_nx = sum([level.n for level in M])  
+      
+    _debug_print(f"Template shapes - vi: {[item.shape for item in vi_template]}", None, debug)  
+    _debug_print(f"Template shapes - xi: {[item.shape for item in xi_template]}", None, debug)  
       
     # FIXED: Skip unvectorization if no causal states  
     if total_nv > 0:  
@@ -220,40 +231,25 @@ def spm_DEM_diff(M, u, debug=False):
         vi = vi_template  
       
     xi = spm_unvec(u['x'][0], xi_template)  
-    ai = spm_unvec(u['a'][0], ai_template)  
       
-    _debug_print(f"Unvectorized states - vi: {len(vi)} levels", None, debug)  
-    _debug_print(f"Unvectorized states - xi: {len(xi)} levels", None, debug)  
-      
-    # Update states  
-    for i in range(nl):  
-        if i < len(vi) and vi[i] is not None:  
-            u['v'][i] = vi[i]  
-        if i < len(xi) and xi[i] is not None:  
-            u['x'][i] = xi[i]  
-        if i < len(ai) and ai[i] is not None:  
-            u['a'][i] = ai[i]  
+    try:  
+        ai = spm_unvec(u['a'][0], ai_template)  
+    except:  
+        ai = ai_template  
       
     # Evaluate model at each level  
-    for i in range(nl - 1):  
-        if M[i].g is not None and hasattr(M[i], 'x') and M[i].x is not None:  
-            g_val = M[i].g(M[i].x, vi[i] if i < len(vi) else None, M[i].pE)  
-            u['v'][i+1] = g_val  
+    for i in range(nl):  
+        if hasattr(M[i], 'g') and M[i].g is not None:  
+            try:  
+                y = M[i].g(xi[i], vi[i], M[i].pE)  
+                _debug_print(f"Level {i} g output: {y}", None, debug)  
+            except Exception as e:  
+                _debug_print(f"Level {i} g evaluation failed: {e}", None, debug)  
       
-    # Compute Jacobians (simplified)  
-    for i in range(nl - 1):  
-        for j in range(nl - 1):  
-            if i == j:  
-                dg['dv'][i+1][j] = sparse.csr_matrix((M[i].m, M[i].m))  
-                dg['dx'][i+1][j] = sparse.csr_matrix((M[i].m, M[i].n))  
-                dg['dp'][i+1][j] = sparse.csr_matrix((M[i].m, M[i].p))  
-                dg['dv'][i][j] = sparse.csr_matrix((M[i].l, M[i].m))  
-                dg['dx'][i][j] = sparse.csr_matrix((M[i].l, M[i].n))  
-                dg['dp'][i][j] = sparse.csr_matrix((M[i].l, M[i].p))  
-                df['dv'][i][j] = sparse.csr_matrix((M[i].n, M[i].m))  
-                df['dx'][i][j] = sparse.csr_matrix((M[i].n, M[i].n))  
-                df['dp'][i][j] = sparse.csr_matrix((M[i].n, M[i].p))  
-                df['dw'][i][j] = sparse.eye(M[i].n, format='csr')  
+    # Return updated states and Jacobians  
+    u['v'] = vi  
+    u['x'] = xi  
+    u['a'] = ai  
       
     _debug_print("spm_DEM_diff output", (u, dg, df), debug)  
     return u, dg, df
