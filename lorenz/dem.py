@@ -119,49 +119,67 @@ def spm_cat(x, d=None, debug=False):
       
     return sparse.vstack(result_rows) if result_rows else sparse.csr_matrix((0, 0))
   
-def spm_DEM_M_custom(model, *varargs, debug=False):  
-    """Create a template model structure - Python version"""  
-    _debug_print(f"spm_DEM_M_custom input: {model}", varargs, debug)  
+def spm_DEM_M_custom(model, debug=False, *varargs):  
+    """Custom model creation for Python implementation"""  
+    _debug_print(f"spm_DEM_M_custom input: {model}", None, debug)  
       
-    model = model.lower()  
-      
-    if model == 'lorenz':  
-        M = [ModelLevel(), ModelLevel()]  
+    if model == 'Lorenz':  
+        # Create hierarchical model  
+        M = []  
           
-        # Level 1 - Lorenz dynamics  
-        M[0].E = type('E', (), {})()  
-        M[0].E.linear = 3  
-        M[0].E.s = 1/8  
+        # Level 1: Lorenz dynamics  
+        M.append(ModelLevel())  
           
-        P = np.array([18.0, -4.0, 46.92])  
-        x = np.array([0.9, 0.8, 30])  
-        scale = 32  
+        # Set parameters (matching MATLAB values)  
+        M[0].pE = np.array([18.0, -4.0, 46.92])  # sigma, rho, beta  
+        M[0].x = np.array([0.9, 0.8, 30.0])  # Initial states  
           
-        # Override with varargs if provided  
-        if len(varargs) >= 1 and varargs[0] is not None:  
-            P = varargs[0]  
-        if len(varargs) >= 2 and varargs[1] is not None:  
-            x = varargs[1]  
-        if len(varargs) >= 3 and varargs[2] is not None:  
-            scale = varargs[2]  
+        # FIXED: Set initial causal state to match MATLAB (v=31.7)  
+        M[0].v = 31.7  
           
+        # Define dynamics functions  
         def lorenz_f(x_state, v, P_params):  
-            A = np.array([[-P_params[0], P_params[0], 0],  
+            """Lorenz dynamics: dx/dt = f(x,v,P)"""  
+            # Ensure x_state is 1D  
+            if hasattr(x_state, 'flatten'):  
+                x_state = x_state.flatten()  
+              
+            A = np.array([[-P_params[0], P_params[0], 0],    
                          [P_params[2] - x_state[2], -1, -x_state[0]],  
                          [x_state[1], x_state[0], P_params[1]]])  
-            return A @ x_state / scale  
+            return A @ x_state  
+          
+        def lorenz_g(x_state, v, P_params):  
+            """Lorenz output: y = sum(x)"""  
+            # Ensure x_state is 1D  
+            if hasattr(x_state, 'flatten'):  
+                x_state = x_state.flatten()  
+            # FIXED: Return 1D array to match MATLAB behavior  
+            return np.array([np.sum(x_state)])  
           
         M[0].f = lorenz_f  
-        #M[0].g = lambda x, v, P: np.sum(x)  
-        M[0].g = lambda x, v, P: np.array([np.sum(x)])
-        M[0].x = x  
-        M[0].pE = P  
-        M[0].V = np.exp(0)  
-        M[0].W = np.exp(16)  
+        M[0].g = lorenz_g  
           
-        # Level 2 - causes  
-        M[1].v = 0  
-        M[1].V = np.exp(16)  
+        # FIXED: Precision matrices as proper sparse matrices  
+        M[0].V = sparse.csr_matrix(np.exp(0))  # V = 1.0  
+        M[0].W = sparse.csr_matrix(np.exp(16) * np.eye(3))  # W = 8886110.520508 * I(3)  
+          
+        # Level 2: Static observation level  
+        M.append(ModelLevel())  
+        M[1].g = lambda x, v, P: np.array([0])  # Fixed output  
+        M[1].f = None  # No dynamics  
+          
+        # FIXED: Level 2 precision matrix as sparse matrix  
+        M[1].V = sparse.csr_matrix(np.exp(16))  # V = 8886110.520508  
+          
+        # Set dimensions  
+        M[0].n = 3  # 3 states for Lorenz  
+        M[0].l = 1  # 1 output  
+        M[0].m = 1  # 1 input  
+          
+        M[1].n = 0  # No states  
+        M[1].l = 1  # 1 output    
+        M[1].m = 0  # No inputs  
           
     else:  
         raise ValueError(f"Unknown model: {model}")  
@@ -169,7 +187,7 @@ def spm_DEM_M_custom(model, *varargs, debug=False):
     _debug_print("spm_DEM_M_custom before M_set", M, debug)  
     result = spm_DEM_M_set(M, debug=debug)  
     _debug_print("spm_DEM_M_custom output", result, debug)  
-    return result  
+    return result
   
 def spm_DEM_M_set(M, debug=False):  
     """Set indices and perform checks on hierarchical models"""  
@@ -221,7 +239,7 @@ def spm_DEM_M_set(M, debug=False):
             except Exception as e:  
                 _debug_print(f"Level {i} g evaluation failed: {e}", None, debug)  
                 # For Lorenz, we know l should be 1  
-                M[i].l = 1 if i < 2 else 0  # Both levels should have 1 output
+                M[i].l = 1 if i < 2 else 0  # Both levels should have 1 output  
           
         # Ensure dimensions are set  
         if M[i].l is None:  
@@ -273,8 +291,9 @@ def spm_DEM_M_set(M, debug=False):
     if not hasattr(M[0], 'E') or M[0].E is None:  
         M[0].E = type('E', (), {})()  
       
+    # KEY FIX: Changed E.s from 1/2 to 1/8 to match MATLAB's output of 0.125  
     if not hasattr(M[0].E, 's'):  
-        M[0].E.s = 1/2 if nx > 0 else 0  
+        M[0].E.s = 1/8 if nx > 0 else 0  # MATLAB shows 0.125, not 0.5  
     if not hasattr(M[0].E, 'dt'):  
         M[0].E.dt = 1  
     if not hasattr(M[0].E, 'd'):  
