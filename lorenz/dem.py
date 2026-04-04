@@ -265,13 +265,13 @@ def spm_DEM_diff(M, u, debug=False):
           
         # Compute numerical Jacobians  
         if i < nl - 1:  
-            df['dv'][i][i] = compute_jacobian(lambda x: M[i].f(xi[i], x, M[i].pE), vi[i], debug)  
-            df['dx'][i][i] = compute_jacobian(lambda x: M[i].f(x, vi[i], M[i].pE), xi[i], debug)  
-            df['dp'][i][i] = compute_jacobian(lambda x: M[i].f(xi[i], vi[i], x), M[i].pE, debug)  
+            df['dv'][i][i] = compute_jacobian(lambda x: M[i].f(xi[i], x, M[i].pE), vi[i], debug=debug)  
+            df['dx'][i][i] = compute_jacobian(lambda x: M[i].f(x, vi[i], M[i].pE), xi[i], debug=debug)  
+            df['dp'][i][i] = compute_jacobian(lambda x: M[i].f(xi[i], vi[i], x), M[i].pE, debug=debug)  
           
-        dg['dv'][i][i] = compute_jacobian(lambda x: M[i].g(xi[i], x, M[i].pE), vi[i], debug)  
-        dg['dx'][i][i] = compute_jacobian(lambda x: M[i].g(x, vi[i], M[i].pE), xi[i], debug)  
-        dg['dp'][i][i] = compute_jacobian(lambda x: M[i].g(xi[i], vi[i], x), M[i].pE, debug)  
+        dg['dv'][i][i] = compute_jacobian(lambda x: M[i].g(xi[i], x, M[i].pE), vi[i], debug=debug)  
+        dg['dx'][i][i] = compute_jacobian(lambda x: M[i].g(x, vi[i], M[i].pE), xi[i], debug=debug)  
+        dg['dp'][i][i] = compute_jacobian(lambda x: M[i].g(xi[i], vi[i], x), M[i].pE, debug=debug)  
       
     # Set constant terms for linking causes over levels  
     for i in range(nl - 1):  
