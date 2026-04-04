@@ -43,7 +43,32 @@ def _debug_print(msg, obj=None, debug=False):
                 print(f" | Type: {type(obj).__name__} | Value: {obj}", end="")  
         print()  
   
-
+def lorenz_f(x, v, P):  
+    """Lorenz dynamics function - matches MATLAB implementation"""  
+    # Ensure x is a numpy array  
+    if sparse.issparse(x):  
+        x = x.toarray().flatten()  
+    if np.isscalar(x):  
+        x = np.array([x])  
+      
+    # Lorenz equations: dx/dt = [-P(1) P(1) 0; (P(3)-x(3)) -1 -x(1); x(2) x(1) P(2)]*x/32  
+    A = np.array([[-P[0], P[0], 0],  
+                  [P[2] - x[2], -1, -x[0]],  
+                  [x[1], x[0], P[1]]])  
+      
+    dx = A @ x / 32  
+    return dx  
+  
+def lorenz_g(x, v, P):  
+    """Lorenz observation function - matches MATLAB implementation"""  
+    # Ensure x is a numpy array  
+    if sparse.issparse(x):  
+        x = x.toarray().flatten()  
+    if np.isscalar(x):  
+        x = np.array([x])  
+      
+    # Observation function: sum(x)  
+    return np.sum(x)
   
 def spm_vec(X, *args):  
     """Vectorise a numeric, cell or structure array - matches MATLAB spm_vec"""  
