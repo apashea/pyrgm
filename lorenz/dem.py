@@ -77,45 +77,35 @@ def spm_vec(X, *args):
         return np.array([])
 
 def spm_unvec(vX, template):  
-    """Unvectorise a vectorised array - matches MATLAB spm_unvec"""  
-    if isinstance(template, list):  
-        # Handle cell array template  
-        result = []  
-        idx = 0  
-        for item in template:  
-            if hasattr(item, 'shape'):  
-                n = np.prod(item.shape)  
-            else:  
-                n = 1  
-            if sparse.issparse(item):  
-                new_item = sparse.csr_matrix(vX[idx:idx+n].reshape(item.shape))  
-            else:  
-                new_item = vX[idx:idx+n].reshape(item.shape)  
-            result.append(new_item)  
-            idx += n  
-        return result  
-    elif isinstance(template, dict):  
-        # Handle structure template  
-        result = {}  
-        idx = 0  
-        for key in sorted(template.keys()):  
-            item = template[key]  
-            if hasattr(item, 'shape'):  
-                n = np.prod(item.shape)  
-            else:  
-                n = 1  
-            if sparse.issparse(item):  
-                result[key] = sparse.csr_matrix(vX[idx:idx+n].reshape(item.shape))  
-            else:  
-                result[key] = vX[idx:idx+n].reshape(item.shape)  
-            idx += n  
-        return result  
-    else:  
-        # Single array  
-        if sparse.issparse(template):  
-            return sparse.csr_matrix(vX.reshape(template.shape))  
+    """Unvectorise a vector into a cell array - matches MATLAB spm_unvec"""  
+    _debug_print(f"spm_unvec: vX.shape={vX.shape if hasattr(vX, 'shape') else 'N/A'}", None, False)  
+    _debug_print(f"spm_unvec: template shapes={[item.shape for item in template]}", None, False)  
+      
+    if not isinstance(template, list):  
+        return vX  
+      
+    result = []  
+    idx = 0  
+    for i, item in enumerate(template):  
+        if sparse.issparse(item):  
+            n = item.shape[0] * item.shape[1]  
         else:  
-            return vX.reshape(template.shape)
+            n = item.size  
+          
+        _debug_print(f"spm_unvec: item {i}, n={n}, idx={idx}, idx+n={idx+n}", None, False)  
+          
+        if idx + n > len(vX):  
+            _debug_print(f"spm_unvec: WARNING idx+n ({idx+n}) > len(vX) ({len(vX)})", None, False)  
+            n = len(vX) - idx  
+          
+        if sparse.issparse(item):  
+            new_item = sparse.csr_matrix(vX[idx:idx+n].reshape(item.shape))  
+        else:  
+            new_item = vX[idx:idx+n].reshape(item.shape)  
+        result.append(new_item)  
+        idx += n  
+      
+    return result
 
 
 
@@ -148,7 +138,7 @@ def spm_DEM_diff(M, u, debug=False):
           'dx': [[None for _ in range(nl-1)] for _ in range(nl-1)],  
           'dp': [[None for _ in range(nl-1)] for _ in range(nl-1)]}  
       
-    # Partition states - FIXED: Account for temporal dimension  
+    # Partition states - FIXED: Use per-time-step template structure  
     temp_dim = u['v'][0].shape[0] if hasattr(u['v'][0], 'shape') else 1  
       
     vi_template = []  
@@ -156,36 +146,34 @@ def spm_DEM_diff(M, u, debug=False):
     ai_template = []  
       
     for level in M:  
-        # Handle v template  
+        # Handle v template - per-time-step structure  
         if hasattr(level, 'v') and level.v is not None:  
             if np.isscalar(level.v):  
-                vi_template.append(np.tile(np.array([level.v]), temp_dim))  
+                vi_template.append(np.array([level.v]))  # Shape (1,) per time step  
             elif sparse.issparse(level.v):  
-                vi_template.append(sparse.csr_matrix(np.tile(level.v.toarray().flatten(), temp_dim).reshape(temp_dim, -1)))  
+                vi_template.append(level.v)  
             else:  
-                vi_template.append(np.tile(level.v, temp_dim))  
+                vi_template.append(np.array(level.v))  
         else:  
-            vi_template.append(sparse.csr_matrix((temp_dim, level.l if hasattr(level, 'l') else 0)))  
+            vi_template.append(sparse.csr_matrix((level.l, 1)))  
           
-        # Handle x template  
+        # Handle x template - per-time-step structure  
         if hasattr(level, 'x') and level.x is not None:  
             if sparse.issparse(level.x):  
-                xi_template.append(sparse.csr_matrix(np.tile(level.x.toarray().flatten(), temp_dim).reshape(temp_dim, -1)))  
+                xi_template.append(level.x)  
             else:  
-                xi_template.append(np.tile(level.x, temp_dim))  
+                xi_template.append(np.array(level.x))  
         else:  
-            xi_template.append(sparse.csr_matrix((temp_dim, level.n if hasattr(level, 'n') else 0)))  
+            xi_template.append(sparse.csr_matrix((level.n, 1)))  
           
-        # Handle a template  
+        # Handle a template - per-time-step structure  
         if hasattr(level, 'a') and level.a is not None:  
-            if np.isscalar(level.a):  
-                ai_template.append(np.tile(np.array([level.a]), temp_dim))  
-            elif sparse.issparse(level.a):  
-                ai_template.append(sparse.csr_matrix(np.tile(level.a.toarray().flatten(), temp_dim).reshape(temp_dim, -1)))  
+            if sparse.issparse(level.a):  
+                ai_template.append(level.a)  
             else:  
-                ai_template.append(np.tile(level.a, temp_dim))  
+                ai_template.append(np.array(level.a))  
         else:  
-            ai_template.append(sparse.csr_matrix((temp_dim, 0)))  
+            ai_template.append(sparse.csr_matrix((0, 1)))  
       
     _debug_print(f"Template shapes: vi[0]={vi_template[0].shape if vi_template else 'N/A'}", None, debug)  
       
@@ -193,38 +181,26 @@ def spm_DEM_diff(M, u, debug=False):
     xi = spm_unvec(u['x'][0], xi_template)  
     ai = spm_unvec(u['a'][0], ai_template)  
       
-    # Evaluate functions  
+    # Update states  
     for i in range(nl):  
+        if M[i].l > 0:  
+            u['v'][i] = spm_vec(vi[i])  
+        if M[i].n > 0:  
+            u['x'][i] = spm_vec(xi[i])  
+        if hasattr(M[i], 'a') and M[i].l > 0:  
+            u['a'][i] = spm_vec(ai[i])  
+      
+    # Evaluate functions and compute derivatives  
+    for i in range(nl - 1):  
         if M[i].g is not None:  
-            u['g'][i] = M[i].g(xi[i], vi[i], M[i].pE)  
+            g_val = M[i].g(xi[i], vi[i+1], M[i].pE)  
+            dg['dv'][i+1][i] = compute_jacobian(lambda v: M[i].g(xi[i], v, M[i].pE), vi[i+1])  
+            dg['dx'][i+1][i] = compute_jacobian(lambda x: M[i].g(x, vi[i+1], M[i].pE), xi[i])  
+          
         if M[i].f is not None:  
-            u['f'][i] = M[i].f(xi[i], vi[i], M[i].pE)  
-      
-    # Compute Jacobians (simplified numerical differentiation)  
-    eps = 1e-6  
-      
-    for i in range(nl):  
-        for j in range(nl-1):  
-            if i > j:  
-                # dg/dv  
-                if M[i].g is not None and M[j].v is not None:  
-                    dg['dv'][i][j] = _numerical_jacobian(  
-                        lambda v: M[i].g(xi[i], v, M[i].pE), vi[j], eps)  
-                  
-                # dg/dx  
-                if M[i].g is not None and M[j].x is not None:  
-                    dg['dx'][i][j] = _numerical_jacobian(  
-                        lambda x: M[i].g(x, vi[i], M[i].pE), xi[j], eps)  
-                  
-                # df/dv  
-                if M[i].f is not None and M[j].v is not None:  
-                    df['dv'][i][j] = _numerical_jacobian(  
-                        lambda v: M[i].f(xi[i], v, M[i].pE), vi[j], eps)  
-                  
-                # df/dx  
-                if M[i].f is not None and M[j].x is not None:  
-                    df['dx'][i][j] = _numerical_jacobian(  
-                        lambda x: M[i].f(x, vi[i], M[i].pE), xi[j], eps)  
+            f_val = M[i].f(xi[i], vi[i], M[i].pE)  
+            df['dv'][i][i] = compute_jacobian(lambda v: M[i].f(xi[i], v, M[i].pE), vi[i])  
+            df['dx'][i][i] = compute_jacobian(lambda x: M[i].f(x, vi[i], M[i].pE), xi[i])  
       
     # Concatenate hierarchical forms  
     D = {}  
@@ -235,6 +211,34 @@ def spm_DEM_diff(M, u, debug=False):
       
     _debug_print("spm_DEM_diff output", D, debug)  
     return u, D, df  
+  
+def compute_jacobian(func, x):  
+    """Compute Jacobian df/dx numerically"""  
+    eps = 1e-6  
+    f0 = func(x)  
+    if sparse.issparse(f0):  
+        f0 = f0.toarray().flatten()  
+    else:  
+        f0 = np.array(f0)  
+      
+    J = np.zeros((len(f0), len(x)))  
+      
+    for j in range(len(x)):  
+        x_eps = x.copy()  
+        if np.isscalar(x_eps):  
+            a_eps = x_eps + eps  
+        else:  
+            a_eps = x_eps.copy()  
+            a_eps[0] += eps  
+          
+        f_eps = func(a_eps)  
+          
+        if sparse.issparse(f0):  
+            dfda = (f_eps - f0) / eps  
+        else:  
+            dfda = (np.array(f_eps) - np.array(f0)) / eps  
+          
+        return dfda
   
 def _numerical_jacobian(func, x, eps=1e-6):  
     """Compute numerical Jacobian"""  
