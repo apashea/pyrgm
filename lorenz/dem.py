@@ -702,6 +702,33 @@ def spm_kron(A, B):
     # Use scipy's kron for sparse matrices  
     return sparse.kron(A, B)  
 
+def speye(m, n=None, k=0):  
+    """Sparse identity matrix - matches MATLAB speye behavior"""  
+    if n is None:  
+        n = m  
+      
+    if k == 0:  
+        # Standard identity matrix  
+        return sparse.eye(m, n, format='csr')  
+    else:  
+        # Offset diagonal matrix  
+        if k > 0:  
+            # Superdiagonal  
+            if m > k and n > 0:  
+                rows = np.arange(k, m)  
+                cols = np.arange(min(m - k, n))  
+                data = np.ones(len(rows))  
+                return sparse.csr_matrix((data, (rows, cols)), shape=(m, n))  
+        else:  
+            # Subdiagonal  
+            if n > abs(k) and m > 0:  
+                rows = np.arange(min(m, n - abs(k)))  
+                cols = np.arange(abs(k), n)  
+                data = np.ones(len(rows))  
+                return sparse.csr_matrix((data, (rows, cols)), shape=(m, n))  
+          
+        return sparse.csr_matrix((m, n))
+
 def format_value_for_display(val, name=""):  
     """Helper function to format values for display, handling scalars and arrays"""  
     if np.isscalar(val):  
