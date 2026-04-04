@@ -285,12 +285,22 @@ def compute_jacobian(func, x, debug=False):
     """Compute Jacobian df/dx numerically"""  
     eps = 1e-6  
     f0 = func(x)  
+      
+    # Handle scalar outputs  
+    if np.isscalar(f0):  
+        f0 = np.array([f0])  
+      
     J = np.zeros((len(f0), len(x)))  
       
     for j in range(len(x)):  
         x_eps = x.copy()  
         x_eps[j] += eps  
         f_eps = func(x_eps)  
+          
+        # Handle scalar outputs  
+        if np.isscalar(f_eps):  
+            f_eps = np.array([f_eps])  
+          
         J[:, j] = (f_eps - f0) / eps  
       
     return J
