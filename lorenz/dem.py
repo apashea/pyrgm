@@ -1037,19 +1037,6 @@ def _block_diag(matrices):
 
 
 
-def compute_jacobian(f, x, v, p):  
-    """Compute Jacobian df/dx numerically"""  
-    eps = 1e-6  
-    f0 = f(x, v, p)  
-    J = np.zeros((len(x), len(x)))  
-      
-    for j in range(len(x)):  
-        x_eps = x.copy()  
-        x_eps[j] += eps  
-        f_eps = f(x_eps, v, p)  
-        J[:, j] = (f_eps - f0) / eps  
-      
-    return J
 def spm_DEM_generate(M, U, P=None, h=None, g=None, debug=False):  
     """Generate data for a Hierarchical Dynamic Model (HDM)"""  
     _debug_print("spm_DEM_generate input", (M, U), debug)  
