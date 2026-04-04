@@ -408,131 +408,126 @@ def spm_DEM_int(M, z, w, u, debug=False):
     z = z_cat + u_cat  
     w = spm_cat(w, debug=debug)  
     _debug_print(f"Combined z shape: {z.shape}", z, debug)  
-    _debug_print(f"Combined w shape: {w.shape}", w, debug)  
+    _debug_print(f"w shape: {w.shape}", w, debug)  
       
-    # Number of states and parameters  
-    nt = z.shape[1]  # number of time steps  
-    nl = len(M)  # number of levels  
-    nv = sum([level.l for level in M])  # number of v (causal states)  
-    nx = sum([level.n for level in M])  # number of x (hidden states)  
+    # Number of levels and time points  
+    nl = len(M)  
+    nt = z.shape[1] if hasattr(z, 'shape') else 1024  
       
-    _debug_print(f"Dimensions: nl={nl}, nv={nv}, nx={nx}, nt={nt}", None, debug)  
-      
-    # Initialize generalized coordinates  
-    gE = M[0].E.n if hasattr(M[0], 'E') and M[0].E else 6  
-    dE = M[0].E.d if hasattr(M[0], 'E') and M[0].E else 2  
+    # Generalized filtering parameters  
+    try:  
+        nD = M[0].E.n if hasattr(M[0], 'E') and hasattr(M[0].E, 'n') else 4  
+        dE = M[0].E.d if hasattr(M[0], 'E') and hasattr(M[0].E, 'd') else 2  
+    except:  
+        nD = 4  
+        dE = 2  
       
     # Initialize states  
-    u_states = type('states', (), {})()  
-    u_states.v = [sparse.csr_matrix((M[i].l * (gE + 1), 1)) for i in range(nl)]  
-    u_states.x = [sparse.csr_matrix((M[i].n * (gE + 1), 1)) for i in range(nl)]  
-    u_states.z = [sparse.csr_matrix((M[i].l * (dE + 1), 1)) for i in range(nl)]  
+    gE = sparse.csr_matrix((nl * (dE + 1), nt))  
+    gP = sparse.csr_matrix((nl * (dE + 1), nl * (dE + 1)))  
       
-    # Set initial conditions from model  
+    # Create response and hidden states  
+    V = []  
+    X = []  
+    Z = []  
+    W = []  
+      
     for i in range(nl):  
-        if M[i].v is not None:  
-            if np.isscalar(M[i].v):  
-                u_states.v[i][0, 0] = M[i].v  
+        if M[i].l > 0:  
+            V.append(sparse.csr_matrix((M[i].l, nt)))  
+            Z.append(sparse.csr_matrix((M[i].l, nt)))  
+        else:  
+            V.append(sparse.csr_matrix((0, nt)))  
+            Z.append(sparse.csr_matrix((0, nt)))  
+              
+        if M[i].n > 0:  
+            X.append(sparse.csr_matrix((M[i].n, nt)))  
+            W.append(sparse.csr_matrix((M[i].n, nt)))  
+        else:  
+            X.append(sparse.csr_matrix((0, nt)))  
+            W.append(sparse.csr_matrix((0, nt)))  
+      
+    # Initial states  
+    u_states = type('states', (), {})()  
+    u_states.v = []  
+    u_states.x = []  
+    u_states.z = []  
+      
+    for i in range(nl):  
+        if M[i].l > 0:  
+            if M[i].v is not None:  
+                u_states.v.append(sparse.csr_matrix(M[i].v))  
             else:  
-                vec_v = spm_vec(M[i].v)  
-                for j in range(min(len(vec_v), u_states.v[i].shape[0])):  
-                    u_states.v[i][j, 0] = vec_v[j]  
-          
-        if M[i].x is not None:  
-            if sparse.issparse(M[i].x):  
-                vec_x = M[i].x.toarray().flatten()  
+                u_states.v.append(sparse.csr_matrix((M[i].l, 1)))  
+        else:  
+            u_states.v.append(sparse.csr_matrix((0, 1)))  
+              
+        if M[i].n > 0:  
+            if M[i].x is not None:  
+                u_states.x.append(sparse.csr_matrix(M[i].x))  
             else:  
-                vec_x = spm_vec(M[i].x)  
-            for j in range(min(len(vec_x), u_states.x[i].shape[0])):  
-                u_states.x[i][j, 0] = vec_x[j]  
+                u_states.x.append(sparse.csr_matrix((M[i].n, 1)))  
+        else:  
+            u_states.x.append(sparse.csr_matrix((0, 1)))  
+              
+        if i < len(z) and z[i] is not None:  
+            u_states.z.append(sparse.csr_matrix(z[i][:, 0:1] if hasattr(z[i], 'shape') else [[0]]))  
+        else:  
+            u_states.z.append(sparse.csr_matrix((M[i].l if M[i].l > 0 else 0, 1)))  
       
-    # Create response and hidden state arrays  
-    V = [sparse.csr_matrix((M[i].l, nt)) for i in range(nl)]  
-    X = [sparse.csr_matrix((M[i].n, nt)) for i in range(nl)]  
-    Z = [sparse.csr_matrix((M[i].l, nt)) for i in range(nl)]  
-    W = [sparse.csr_matrix((M[i].n, nt)) for i in range(nl)]  
-      
-    # Integration parameters  
-    nD = 16  # number of D-step iterations  
-    dt = M[0].E.dt if hasattr(M[0], 'E') and M[0].E else 1  
-      
-    # Time integration loop  
+    # Generalized filtering iterations  
     for t in range(nt):  
-        _debug_print(f"Time step {t}/{nt}", None, debug)  
-          
         # Update innovations for this time step  
         for i in range(nl):  
-            if i < len(z) and z[i].shape[1] > t:  
-                z_start = i * M[i].l * (dE + 1)  
-                z_end = (i + 1) * M[i].l * (dE + 1)  
-                if z_start < z.shape[0] and z_end <= z.shape[0]:  
-                    u_states.z[i][:, 0] = z[z_start:z_end, t]  
-              
-            if i < len(w) and w[i].shape[1] > t:  
-                w_start = sum([M[j].n for j in range(i)]) * (gE + 1)  
-                w_end = sum([M[j].n for j in range(i + 1)]) * (gE + 1)  
-                if w_start < w.shape[0] and w_end <= w.shape[0]:  
-                    u_states.x[i][:, 0] = w[w_start:w_end, t]  
+            # FIXED: Check if z is a list and access correctly  
+            if isinstance(z, list) and i < len(z) and z[i] is not None:  
+                if hasattr(z[i], 'shape') and z[i].shape[1] > t:  
+                    z_start = i * M[i].l * (dE + 1)  
+                    z_end = (i + 1) * M[i].l * (dE + 1)  
+                    gE[:, z_start:z_end] = z[i][:, t]  
           
-        # Generalized filtering iterations  
-        for d in range(nD):  
-            # D-step: update states  
-            for i in range(nl):  
-                if M[i].n > 0:  
-                    # Simple Euler integration for hidden states  
-                    if hasattr(M[i].f, '__call__'):  
-                        x_current = u_states.x[i][:M[i].n, 0].toarray().flatten()  
-                        v_current = u_states.v[i][:M[i].l, 0].toarray().flatten() if M[i].l > 0 else np.array([0])  
-                          
-                        try:  
-                            dx = M[i].f(x_current, v_current, M[i].pE)  
-                            if sparse.issparse(dx):  
-                                dx = dx.toarray().flatten()  
-                              
-                            # Update only the first derivative  
-                            for j in range(min(len(dx), M[i].n)):  
-                                if j < u_states.x[i].shape[0]:  
-                                    u_states.x[i][j, 0] = dx[j] * dt  
-                        except:  
-                            pass  # Keep current state if evaluation fails  
-          
-        # Save realization - FIXED: Properly handle state saving  
+        # Simple integration (placeholder for full generalized filtering)  
         for i in range(nl):  
-            # Save causal states (v)  
-            if M[i].l > 0:  
-                v_current = u_states.v[i][:M[i].l, 0].toarray().flatten()  
-                if len(v_current) > 0:  
-                    V[i][:, t] = v_current  
-                else:  
-                    # Use initial condition if no update  
-                    if M[i].v is not None:  
-                        if np.isscalar(M[i].v):  
-                            V[i][0, t] = M[i].v  
-                        else:  
-                            v_init = spm_vec(M[i].v)  
-                            if len(v_init) > 0:  
-                                V[i][:min(len(v_init), M[i].l), t] = v_init  
-              
-            # Save hidden states (x)  
             if M[i].n > 0:  
-                x_current = u_states.x[i][:M[i].n, 0].toarray().flatten()  
-                if len(x_current) > 0:  
-                    X[i][:, t] = x_current  
-                else:  
-                    # Use initial condition if no update  
-                    if M[i].x is not None:  
-                        if sparse.issparse(M[i].x):  
-                            x_init = M[i].x.toarray().flatten()  
-                        else:  
-                            x_init = spm_vec(M[i].x)  
-                        if len(x_init) > 0:  
-                            X[i][:min(len(x_init), M[i].n), t] = x_init  
+                # Euler integration for hidden states  
+                if hasattr(M[i].f, '__call__'):  
+                    x_current = u_states.x[i].toarray().flatten()  
+                    v_current = u_states.v[i].toarray().flatten() if u_states.v[i].shape[0] > 0 else np.array([0])  
+                      
+                    # Simple dynamics  
+                    dx = M[i].f(x_current, v_current, M[i].pE)  
+                    if hasattr(dx, 'shape') and dx.size > 0:  
+                        x_new = x_current + dx.flatten() * 0.01  # dt = 0.01  
+                        u_states.x[i] = sparse.csr_matrix(x_new.reshape(-1, 1))  
+              
+            if M[i].l > 0:  
+                # Observation function  
+                if hasattr(M[i].g, '__call__'):  
+                    x_current = u_states.x[i].toarray().flatten()  
+                    v_new = M[i].g(x_current, 0, M[i].pE)  
+                    if hasattr(v_new, 'shape') and v_new.size > 0:  
+                        u_states.v[i] = sparse.csr_matrix(v_new.reshape(-1, 1))  
+          
+        # Save realization - FIXED: Handle empty vi[i]  
+        for i in range(nl):  
+            if M[i].l > 0:  
+                if u_states.v[i] is not None and hasattr(u_states.v[i], 'size') and u_states.v[i].size > 0:  
+                    vec_result = spm_vec(u_states.v[i])  
+                    if len(vec_result) > 0:  
+                        V[i][:, t] = vec_result  
+            if M[i].n > 0:  
+                if u_states.x[i] is not None and hasattr(u_states.x[i], 'size') and u_states.x[i].size > 0:  
+                    vec_result = spm_vec(u_states.x[i])  
+                    if len(vec_result) > 0:  
+                        X[i][:, t] = vec_result  
               
             # Save fluctuations  
-            if M[i].l > 0 and i < len(z) and hasattr(z[i], 'shape') and z[i].shape[1] > t:  
-                Z[i][:, t] = z[i][:, t]  
-            if M[i].n > 0 and i < len(w) and hasattr(w[i], 'shape') and w[i].shape[1] > t:  
-                W[i][:, t] = w[i][:, t]  
+            if M[i].l > 0 and i < len(z) and isinstance(z, list) and z[i] is not None:  
+                if hasattr(z[i], 'shape') and z[i].shape[1] > t:  
+                    Z[i][:, t] = z[i][:, t]  
+            if M[i].n > 0 and i < len(w) and isinstance(w, list) and w[i] is not None:  
+                if hasattr(w[i], 'shape') and w[i].shape[1] > t:  
+                    W[i][:, t] = w[i][:, t]  
       
     _debug_print("spm_DEM_int output", (V, X, Z, W), debug)  
     return V, X, Z, W
