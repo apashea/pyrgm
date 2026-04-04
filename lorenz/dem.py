@@ -884,7 +884,7 @@ def spm_DEM_int(M, z, w, u, debug=False):
                 u_states['v'][0][idx:idx+M[i].l, :] = M[i].v  
             else:  
                 # Broadcast the initial state across all time steps  
-                u_states['v'][0][idx:idx+M[i].l, :] = np.tile(M[i].v].reshape(-1, 1), (1, nt))  
+                u_states['v'][0][idx:idx+M[i].l, :] = np.tile(M[i].v.reshape(-1, 1), (1, nt))  
             idx += M[i].l  
       
     idx = 0  
