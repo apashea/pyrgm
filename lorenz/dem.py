@@ -940,13 +940,33 @@ def spm_DEM_int(M, z, w, u, debug=False):
       
     _debug_print(f"Derivative operators: Dx.shape={Dx.shape}, Dv.shape={Dv.shape}", None, debug)  
       
-    # Initialize generalized states  
+    # FIXED: Initialize generalized states with proper dimensions  
     u_states = {  
         'v': [sparse.csr_matrix((M[i].l, nt)) for i in range(nl)],  
         'x': [sparse.csr_matrix((M[i].n, nt)) for i in range(nl)],  
         'z': [sparse.csr_matrix((M[i].l, nt)) for i in range(nl)],  
         'w': [sparse.csr_matrix((M[i].n, nt)) for i in range(nl)]  
     }  
+      
+    # CRITICAL FIX: Initialize u_states with actual values, not empty matrices  
+    for i in range(nl):  
+        # Initialize v states  
+        if M[i].l > 0 and M[i].v is not None:  
+            if np.isscalar(M[i].v):  
+                u_states['v'][i][:, 0] = M[i].v  
+            elif sparse.issparse(M[i].v):  
+                u_states['v'][i][:, 0] = M[i].v.toarray().flatten()  
+            else:  
+                u_states['v'][i][:, 0] = M[i].v  
+          
+        # Initialize x states  
+        if M[i].n > 0 and M[i].x is not None:  
+            if sparse.issparse(M[i].x):  
+                u_states['x'][i][:, 0] = M[i].x.toarray().flatten()  
+            else:  
+                u_states['x'][i][:, 0] = M[i].x  
+      
+    _debug_print(f"Initialized u_states: v[0].shape={u_states['v'][0].shape}", None, debug)  
       
     # Time integration loop  
     for t in range(nt):  
