@@ -120,89 +120,192 @@ def spm_unvec(vX, template):
 
 
 def spm_DEM_diff(M, u, debug=False):  
-    """Evaluate an active model given innovations - matches MATLAB spm_DEM_diff"""  
-    _debug_print("spm_DEM_diff input", None, debug)  
+    """Evaluate an active model given innovations z{i} and w{i}"""  
+    _debug_print("spm_DEM_diff input", (M, u), debug)  
       
     # Check for action (ADEM)  
     try:  
         M[0].a  
-        ADEM = True  
+        ADEM = 1  
     except:  
         u['a'] = u['v']  
         for level in M:  
-            level.a = sparse.csr_matrix((0, 1))  
-            level.k = 0  
-        for level in u['a']:  
-            level = sparse.csr_matrix((0, 1))  
-        ADEM = False  
+            if not hasattr(level, 'a'):  
+                level.a = sparse.csr_matrix((0, 1))  
+            if not hasattr(level, 'k'):  
+                level.k = 0  
+        ADEM = 0  
       
-    nl = len(M)  # number of levels  
-    n = M[0].E.n + 1  # order of embedding  
+    # Number of levels and order parameters  
+    nl = len(M)  
+    n = M[0].E.n + 1 if hasattr(M[0], 'E') and M[0].E is not None else 1  
       
-    # Initialize derivative arrays  
-    dg = {'dv': [], 'dx': [], 'da': []}  
-    df = {'dv': [], 'dx': [], 'da': []}  
+    # Initialize arrays for hierarchical form  
+    dg = {'dv': [[None for _ in range(nl-1)] for _ in range(nl)],  
+          'dx': [[None for _ in range(nl-1)] for _ in range(nl)],  
+          'dp': [[None for _ in range(nl-1)] for _ in range(nl)]}  
+    df = {'dv': [[None for _ in range(nl-1)] for _ in range(nl-1)],  
+          'dx': [[None for _ in range(nl-1)] for _ in range(nl-1)],  
+          'dp': [[None for _ in range(nl-1)] for _ in range(nl-1)]}  
       
-    # Partition states  
-    vi = spm_unvec(u['v'][0], [level.v for level in M])  
-    xi = spm_unvec(u['x'][0], [level.x for level in M])  
-    ai = spm_unvec(u['a'][0], [level.a for level in M])  
-    zi = spm_unvec(u['z'][0], [level.v for level in M])  
+    # Initialize sparse matrices for derivatives  
+    for i in range(nl - 1):  
+        dg['dv'][i+1][i] = sparse.csr_matrix((M[i].m if hasattr(M[i], 'm') else 0,   
+                                             M[i].m if hasattr(M[i], 'm') else 0))  
+        dg['dx'][i+1][i] = sparse.csr_matrix((M[i].m if hasattr(M[i], 'm') else 0,   
+                                             M[i].n if hasattr(M[i], 'n') else 0))  
+        dg['dp'][i+1][i] = sparse.csr_matrix((M[i].m if hasattr(M[i], 'm') else 0,   
+                                             M[i].p if hasattr(M[i], 'p') else 0))  
+        dg['dv'][i][i] = sparse.csr_matrix((M[i].l if hasattr(M[i], 'l') else 0,   
+                                           M[i].m if hasattr(M[i], 'm') else 0))  
+        dg['dx'][i][i] = sparse.csr_matrix((M[i].l if hasattr(M[i], 'l') else 0,   
+                                           M[i].n if hasattr(M[i], 'n') else 0))  
+        dg['dp'][i][i] = sparse.csr_matrix((M[i].l if hasattr(M[i], 'l') else 0,   
+                                           M[i].p if hasattr(M[i], 'p') else 0))  
+        df['dv'][i][i] = sparse.csr_matrix((M[i].n if hasattr(M[i], 'n') else 0,   
+                                           M[i].m if hasattr(M[i], 'm') else 0))  
+        df['dx'][i][i] = sparse.csr_matrix((M[i].n if hasattr(M[i], 'n') else 0,   
+                                           M[i].n if hasattr(M[i], 'n') else 0))  
+        df['dp'][i][i] = sparse.csr_matrix((M[i].n if hasattr(M[i], 'n') else 0,   
+                                           M[i].p if hasattr(M[i], 'p') else 0))  
       
-    # Derivatives for Jacobian  
-    vi[nl-1] = zi[nl-1]  
-    gi = []  
-    fi = []  
+    # Partition states - FIXED: Convert scalars to arrays in templates  
+    vi_template = []  
+    xi_template = []  
+    ai_template = []  
       
-    for i in range(nl-1, -1, -1):  
-        # Evaluate derivatives using numerical differentiation  
-        if ADEM:  
-            # With action states  
-            dgdx, g = spm_diff(M[i].g, xi[i], vi[i+1], ai[i+1], M[i].pE, 1)  
-            dfdx, f = spm_diff(M[i].f, xi[i], vi[i+1], ai[i+1], M[i].pE, 1)  
-            dgdv = spm_diff(M[i].g, xi[i], vi[i+1], ai[i+1], M[i].pE, 2)  
-            dfdv = spm_diff(M[i].f, xi[i], vi[i+1], ai[i+1], M[i].pE, 2)  
-            dgda = spm_diff(M[i].g, xi[i], vi[i+1], ai[i+1], M[i].pE, 3)  
-            dfda = spm_diff(M[i].f, xi[i], vi[i+1], ai[i+1], M[i].pE, 3)  
+    for level in M:  
+        # Handle v template  
+        if hasattr(level, 'v') and level.v is not None:  
+            if np.isscalar(level.v):  
+                vi_template.append(np.array([level.v]))  
+            elif sparse.issparse(level.v):  
+                vi_template.append(level.v)  
+            else:  
+                vi_template.append(np.array(level.v))  
         else:  
-            # Without action states  
-            dgdx, g = spm_diff(M[i].g, xi[i], vi[i+1], M[i].pE, 1)  
-            dfdx, f = spm_diff(M[i].f, xi[i], vi[i+1], M[i].pE, 1)  
-            dgdv = spm_diff(M[i].g, xi[i], vi[i+1], M[i].pE, 2)  
-            dfdv = spm_diff(M[i].f, xi[i], vi[i+1], M[i].pE, 2)  
-            dgda = sparse.csr_matrix((M[i].l, M[i].k)) if hasattr(M[i], 'k') else sparse.csr_matrix((M[i].l, 0))  
-            dfda = sparse.csr_matrix((M[i].n, M[i].k)) if hasattr(M[i], 'k') else sparse.csr_matrix((M[i].n, 0))  
+            vi_template.append(sparse.csr_matrix((level.l if hasattr(level, 'l') else 0, 1)))  
           
-        gi.append(g)  
-        fi.append(f)  
-        vi[i] = spm_vec(g) + spm_vec(zi[i])  
+        # Handle x template  
+        if hasattr(level, 'x') and level.x is not None:  
+            if sparse.issparse(level.x):  
+                xi_template.append(level.x)  
+            else:  
+                xi_template.append(np.array(level.x))  
+        else:  
+            xi_template.append(sparse.csr_matrix((level.n if hasattr(level, 'n') else 0, 1)))  
           
-        # Store derivatives (simplified - need proper cell array structure)  
-        if i < nl-1:  
-            dg['dx'].append(dgdx)  
-            dg['dv'].append(dgdv)  
-            dg['da'].append(dgda)  
-            df['dx'].append(dfdx)  
-            df['dv'].append(dfdv)  
-            df['da'].append(dfda)  
+        # Handle a template  
+        if hasattr(level, 'a') and level.a is not None:  
+            if np.isscalar(level.a):  
+                ai_template.append(np.array([level.a]))  
+            elif sparse.issparse(level.a):  
+                ai_template.append(level.a)  
+            else:  
+                ai_template.append(np.array(level.a))  
+        else:  
+            ai_template.append(sparse.csr_matrix((0, 1)))  
       
-    # Concatenate hierarchical arrays  
-    dg['dx'] = spm_cat(dg['dx'])  
-    dg['dv'] = spm_cat(dg['dv'])  
-    dg['da'] = spm_cat(dg['da'])  
-    df['dx'] = spm_cat(df['dx'])  
-    df['dv'] = spm_cat(df['dv'])  
-    df['da'] = spm_cat(df['da'])  
+    vi = spm_unvec(u['v'][0], vi_template)  
+    xi = spm_unvec(u['x'][0], xi_template)  
+    ai = spm_unvec(u['a'][0], ai_template)  
       
-    # Update generalized coordinates  
-    u['v'][0] = spm_vec(vi)  
-    u['x'][1] = spm_vec(fi) + u['w'][0]  
+    _debug_print(f"Partitioned states: vi={len(vi)} levels, xi={len(xi)} levels", None, debug)  
       
-    for i in range(1, n-1):  
-        u['v'][i] = dg['dv'] * u['v'][i] + dg['dx'] * u['x'][i] + dg['da'] * u['a'][i] + u['z'][i]  
-        u['x'][i+1] = df['dv'] * u['v'][i] + df['dx'] * u['x'][i] + df['da'] * u['a'][i] + u['w'][i]  
+    # Evaluate model at each level  
+    for i in range(nl):  
+        if i < nl - 1:  
+            # Get parameters  
+            if hasattr(M[i], 'pE') and M[i].pE is not None:  
+                pE = M[i].pE  
+            else:  
+                pE = np.array([])  
+              
+            # Evaluate functions  
+            if M[i].g is not None:  
+                try:  
+                    g_val = M[i].g(xi[i], vi[i], pE)  
+                except:  
+                    g_val = sparse.csr_matrix((M[i].l if hasattr(M[i], 'l') else 0, 1))  
+            else:  
+                g_val = sparse.csr_matrix((M[i].l if hasattr(M[i], 'l') else 0, 1))  
+              
+            if M[i].f is not None:  
+                try:  
+                    f_val = M[i].f(xi[i], vi[i], pE)  
+                except:  
+                    f_val = sparse.csr_matrix((M[i].n if hasattr(M[i], 'n') else 0, 1))  
+            else:  
+                f_val = sparse.csr_matrix((M[i].n if hasattr(M[i], 'n') else 0, 1))  
+              
+            # Compute derivatives numerically (simplified)  
+            eps = 1e-6  
+              
+            # dg/dv  
+            if M[i].g is not None and M[i].m > 0 and M[i].l > 0:  
+                try:  
+                    v_eps = vi[i+1].copy() if i+1 < len(vi) else np.array([0])  
+                    if sparse.issparse(v_eps):  
+                        v_eps = v_eps.toarray().flatten()  
+                    v_eps[0] += eps  
+                    g_eps = M[i].g(xi[i], v_eps, pE)  
+                    dg_dv = (np.array(g_eps) - np.array(g_val)) / eps  
+                    dg['dv'][i][i] = sparse.csr_matrix(dg_dv)  
+                except:  
+                    dg['dv'][i][i] = sparse.csr_matrix((M[i].l, M[i].m))  
+              
+            # dg/dx  
+            if M[i].g is not None and M[i].n > 0 and M[i].l > 0:  
+                try:  
+                    x_eps = xi[i].copy()  
+                    if sparse.issparse(x_eps):  
+                        x_eps = x_eps.toarray().flatten()  
+                    x_eps[0] += eps  
+                    g_eps = M[i].g(x_eps, vi[i], pE)  
+                    dg_dx = (np.array(g_eps) - np.array(g_val)) / eps  
+                    dg['dx'][i][i] = sparse.csr_matrix(dg_dx)  
+                except:  
+                    dg['dx'][i][i] = sparse.csr_matrix((M[i].l, M[i].n))  
+              
+            # df/dv  
+            if M[i].f is not None and M[i].m > 0 and M[i].n > 0:  
+                try:  
+                    v_eps = vi[i+1].copy() if i+1 < len(vi) else np.array([0])  
+                    if sparse.issparse(v_eps):  
+                        v_eps = v_eps.toarray().flatten()  
+                    v_eps[0] += eps  
+                    f_eps = M[i].f(xi[i], v_eps, pE)  
+                    df_dv = (np.array(f_eps) - np.array(f_val)) / eps  
+                    df['dv'][i][i] = sparse.csr_matrix(df_dv)  
+                except:  
+                    df['dv'][i][i] = sparse.csr_matrix((M[i].n, M[i].m))  
+              
+            # df/dx  
+            if M[i].f is not None and M[i].n > 0:  
+                try:  
+                    x_eps = xi[i].copy()  
+                    if sparse.issparse(x_eps):  
+                        x_eps = x_eps.toarray().flatten()  
+                    x_eps[0] += eps  
+                    f_eps = M[i].f(x_eps, vi[i], pE)  
+                    df_dx = (np.array(f_eps) - np.array(f_val)) / eps  
+                    df['dx'][i][i] = sparse.csr_matrix(df_dx)  
+                except:  
+                    df['dx'][i][i] = sparse.csr_matrix((M[i].n, M[i].n))  
+              
+            # Constant terms (linking causes over levels)  
+            dg['dv'][i+1][i] = -speye(M[i].m if hasattr(M[i], 'm') else 0,   
+                                      M[i].m if hasattr(M[i], 'm') else 0)  
       
-    return u, dg, df
+    # Concatenate hierarchical forms  
+    D = {}  
+    D['dgdv'] = spm_cat([item for row in dg['dv'] for item in row if item is not None])  
+    D['dgdx'] = spm_cat([item for row in dg['dx'] for item in row if item is not None])  
+    D['dfdv'] = spm_cat([item for row in df['dv'] for item in row if item is not None])  
+    D['dfdx'] = spm_cat([item for row in df['dx'] for item in row if item is not None])  
+      
+    _debug_print("spm_DEM_diff output", D, debug)  
+    return u, D, df
 
 def spm_dx(dfdx, f, t=None, L=None):  
     """Returns dx(t) = (expm(dfdx*t) - I)*inv(dfdx)*f - matches MATLAB spm_dx"""  
