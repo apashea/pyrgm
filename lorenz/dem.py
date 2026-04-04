@@ -158,71 +158,70 @@ def spm_DEM_diff(M, u, debug=False):
     nl = len(M)  
     n = M[0].E.n + 1 if hasattr(M[0], 'E') and M[0].E is not None else 1  
       
+    # Initialize Jacobian matrices  
+    dg = {  
+        'dv': [[None for _ in range(nl - 1)] for _ in range(nl)],  
+        'dx': [[None for _ in range(nl - 1)] for _ in range(nl)],  
+        'dp': [[None for _ in range(nl - 1)] for _ in range(nl)]  
+    }  
+    df = {  
+        'dv': [[None for _ in range(nl - 1)] for _ in range(nl - 1)],  
+        'dx': [[None for _ in range(nl - 1)] for _ in range(nl - 1)],  
+        'dp': [[None for _ in range(nl - 1)] for _ in range(nl - 1)]  
+    }  
+      
     # Initialize Jacobian matrices with correct dimensions  
-    dg = {'dv': [], 'dx': [], 'dp': []}  
-    df = {'dv': [], 'dx': [], 'dp': []}  
-      
-    # Create nested list structure matching MATLAB's cell arrays  
-    for i in range(nl):  
-        dg['dv'].append([])  
-        dg['dx'].append([])  
-        dg['dp'].append([])  
-        if i < nl - 1:  
-            df['dv'].append([])  
-            df['dx'].append([])  
-            df['dp'].append([])  
-      
-    # Initialize Jacobian matrices as sparse matrices  
     for i in range(nl - 1):  
         for j in range(nl - 1):  
-            dg['dv'][i+1].append(sparse.csr_matrix((M[i].m, M[i].m)))  
-            dg['dx'][i+1].append(sparse.csr_matrix((M[i].m, M[i].n)))  
-            dg['dp'][i+1].append(sparse.csr_matrix((M[i].m, M[i].p)))  
-            dg['dv'][i].append(sparse.csr_matrix((M[i].l, M[i].m)))  
-            dg['dx'][i].append(sparse.csr_matrix((M[i].l, M[i].n)))  
-            dg['dp'][i].append(sparse.csr_matrix((M[i].l, M[i].p)))  
-            df['dv'][i].append(sparse.csr_matrix((M[i].n, M[i].m)))  
-            df['dx'][i].append(sparse.csr_matrix((M[i].n, M[i].n)))  
-            df['dp'][i].append(sparse.csr_matrix((M[i].n, M[i].p)))  
+            dg['dv'][i+1][j] = sparse.csr_matrix((M[i].m, M[i].m))  
+            dg['dx'][i+1][j] = sparse.csr_matrix((M[i].m, M[i].n))  
+            dg['dp'][i+1][j] = sparse.csr_matrix((M[i].m, M[i].p))  
+            dg['dv'][i][j] = sparse.csr_matrix((M[i].l, M[i].m))  
+            dg['dx'][i][j] = sparse.csr_matrix((M[i].l, M[i].n))  
+            dg['dp'][i][j] = sparse.csr_matrix((M[i].l, M[i].p))  
+            df['dv'][i][j] = sparse.csr_matrix((M[i].n, M[i].m))  
+            df['dx'][i][j] = sparse.csr_matrix((M[i].n, M[i].n))  
+            df['dp'][i][j] = sparse.csr_matrix((M[i].n, M[i].p))  
       
-    # Partition states - FIXED: Convert scalars to arrays in templates  
+    # Prepare templates for unvectorization  
     vi_template = []  
     xi_template = []  
     ai_template = []  
       
+    total_nv = sum([level.l for level in M])  
+    total_nx = sum([level.n for level in M])  
+      
+    _debug_print(f"Template preparation: total_nv={total_nv}, total_nx={total_nx}", None, debug)  
+      
+    # Create templates for causal states  
     for level in M:  
-        # Handle v template  
-        if hasattr(level, 'v') and level.v is not None:  
+        if level.l > 0:  
             if np.isscalar(level.v):  
-                vi_template.append(np.array([[level.v]]))  # 2D shape for sparse  
-            elif sparse.issparse(level.v):  
+                vi_template.append(np.array([[level.v]]))  # 2D shape for sparse compatibility  
+            else:  
                 vi_template.append(level.v)  
-            else:  
-                vi_template.append(np.array(level.v))  
-        else:  
-            vi_template.append(sparse.csr_matrix((0, 0)))  
-          
-        # Handle x template  
-        if hasattr(level, 'x') and level.x is not None:  
+      
+    # Create templates for hidden states  
+    for level in M:  
+        if level.n > 0:  
             if np.isscalar(level.x):  
-                xi_template.append(np.array([[level.x]]))  
-            elif sparse.issparse(level.x):  
+                xi_template.append(np.array([[level.x]]))  # 2D shape for sparse compatibility  
+            else:  
                 xi_template.append(level.x)  
-            else:  
-                xi_template.append(np.array(level.x))  
-        else:  
-            xi_template.append(sparse.csr_matrix((0, 0)))  
-          
-        # Handle a template  
+      
+    # Create templates for action states  
+    for level in M:  
         if hasattr(level, 'a') and level.a is not None:  
-            if np.isscalar(level.a):  
-                ai_template.append(np.array([[level.a]]))  
-            elif sparse.issparse(level.a):  
-                ai_template.append(level.a)  
+            if sparse.issparse(level.a):  
+                if level.a.nnz > 0:  
+                    ai_template.append(level.a)  
             else:  
-                ai_template.append(np.array(level.a))  
-        else:  
-            ai_template.append(sparse.csr_matrix((0, 0)))  
+                if np.isscalar(level.a):  
+                    ai_template.append(np.array([[level.a]]))  # 2D shape for sparse compatibility  
+                else:  
+                    ai_template.append(level.a)  
+      
+    _debug_print(f"Template shapes: vi={len(vi_template)}, xi={len(xi_template)}, ai={len(ai_template)}", None, debug)  
       
     # Extract and concatenate states for current time step  
     v_vec = []  
@@ -230,68 +229,55 @@ def spm_DEM_diff(M, u, debug=False):
     a_vec = []  
       
     for d in range(n):  
-        # Extract column for current time step from each derivative order  
-        if hasattr(u['v'][d], 'shape') and len(u['v'][d].shape) > 1:  
-            v_slice = u['v'][d][:, 0]  # First time step  
-        else:  
-            v_slice = u['v'][d]  
-          
-        if hasattr(u['x'][d], 'shape') and len(u['x'][d].shape) > 1:  
-            x_slice = u['x'][d][:, 0]  # First time step  
-        else:  
-            x_slice = u['x'][d]  
-          
-        if hasattr(u['a'][d], 'shape') and len(u['a'][d].shape) > 1:  
-            a_slice = u['a'][d][:, 0]  # First time step  
-        else:  
-            a_slice = u['a'][d]  
+        # Use the data as-is - already extracted by spm_DEM_int  
+        v_slice = u['v'][d]  
+        x_slice = u['x'][d]  
+        a_slice = u['a'][d]  
           
         # Vectorize the slices  
         v_vec.extend(spm_vec(v_slice))  
         x_vec.extend(spm_vec(x_slice))  
         a_vec.extend(spm_vec(a_slice))  
       
-    # Concatenate all derivative orders  
-    v_full = np.concatenate(v_vec) if v_vec else np.array([])  
-    x_full = np.concatenate(x_vec) if x_vec else np.array([])  
-    a_full = np.concatenate(a_vec) if a_vec else np.array([])  
+    v_full = np.array(v_vec)  
+    x_full = np.array(x_vec)  
+    a_full = np.array(a_vec)  
+      
+    _debug_print(f"Vectorized states: v={len(v_full)}, x={len(x_full)}, a={len(a_full)}", None, debug)  
       
     # Unvectorize states  
     vi = spm_unvec(v_full, vi_template)  
     xi = spm_unvec(x_full, xi_template)  
     ai = spm_unvec(a_full, ai_template)  
       
-    _debug_print(f"spm_DEM_diff: unvectorized {len(vi)} v, {len(xi)} x, {len(ai)} a states", None, debug)  
-      
     # Evaluate model at each level  
     for i in range(nl - 1):  
-        if M[i].f is not None and len(xi) > i:  
-            # Evaluate f function  
-            try:  
-                f_val = M[i].f(xi[i], vi[i] if i < len(vi) else None, M[i].pE)  
+        if M[i].f is not None and len(xi) > i and len(vi) > i:  
+            # Compute Jacobians numerically  
+            def f_func(x):  
+                return M[i].f(x, vi[i], M[i].pE)  
+              
+            def g_func(x):  
+                return M[i].g(x, vi[i], M[i].pE)  
+              
+            # Compute Jacobians  
+            if len(xi[i]) > 0:  
+                dfdx = compute_jacobian(f_func, xi[i], debug)  
+                dfdv = compute_jacobian(lambda v: M[i].f(xi[i], v, M[i].pE), vi[i], debug)  
+                dfdp = compute_jacobian(lambda p: M[i].f(xi[i], vi[i], p), M[i].pE, debug)  
                   
-                # Compute numerical Jacobians  
-                if hasattr(M[i], 'f') and M[i].f is not None:  
-                    # df/dx  
-                    dfdx = compute_jacobian(lambda x: M[i].f(x, vi[i] if i < len(vi) else None, M[i].pE), xi[i])  
-                    df['dx'][i][i] = sparse.csr_matrix(dfdx)  
-                      
-                    # df/dv  
-                    if i < len(vi):  
-                        dfdv = compute_jacobian(lambda v: M[i].f(xi[i], v, M[i].pE), vi[i])  
-                        df['dv'][i][i] = sparse.csr_matrix(dfdv)  
+                df['dx'][i][i] = sparse.csr_matrix(dfdx)  
+                df['dv'][i][i] = sparse.csr_matrix(dfdv)  
+                df['dp'][i][i] = sparse.csr_matrix(dfdp)  
+              
+            if len(vi[i]) > 0:  
+                dgdx = compute_jacobian(g_func, xi[i], debug)  
+                dgdv = compute_jacobian(lambda v: M[i].g(xi[i], v, M[i].pE), vi[i], debug)  
+                dgdp = compute_jacobian(lambda p: M[i].g(xi[i], vi[i], p), M[i].pE, debug)  
                   
-                if hasattr(M[i], 'g') and M[i].g is not None and i < len(vi):  
-                    # dg/dx  
-                    dgdx = compute_jacobian(lambda x: M[i].g(x, vi[i], M[i].pE), xi[i])  
-                    dg['dx'][i][i] = sparse.csr_matrix(dgdx)  
-                      
-                    # dg/dv  
-                    dgdv = compute_jacobian(lambda v: M[i].g(xi[i], v, M[i].pE), vi[i])  
-                    dg['dv'][i][i] = sparse.csr_matrix(dgdv)  
-                  
-            except Exception as e:  
-                _debug_print(f"spm_DEM_diff: level {i} evaluation failed: {e}", None, debug)  
+                dg['dx'][i][i] = sparse.csr_matrix(dgdx)  
+                dg['dv'][i][i] = sparse.csr_matrix(dgdv)  
+                dg['dp'][i][i] = sparse.csr_matrix(dgdp)  
       
     # Set constant terms for linking causes over levels  
     for i in range(nl - 1):  
