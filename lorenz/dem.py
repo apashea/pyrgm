@@ -158,28 +158,35 @@ def spm_DEM_diff(M, u, debug=False):
     nl = len(M)  
     n = M[0].E.n + 1 if hasattr(M[0], 'E') and M[0].E is not None else 1  
       
-    # Initialize Jacobian structures  
-    dg = {'dv': [[None for _ in range(nl-1)] for _ in range(n+1)],  
-          'dx': [[None for _ in range(nl-1)] for _ in range(n+1)],  
-          'dp': [[None for _ in range(nl-1)] for _ in range(n+1)]}  
-    df = {'dv': [[None for _ in range(nl-1)] for _ in range(nl-1)],  
+    # Initialize template structures  
+    dg = {'dv': [[None for _ in range(nl-1)] for _ in range(nl)],   
+          'dx': [[None for _ in range(nl-1)] for _ in range(nl)],  
+          'dp': [[None for _ in range(nl-1)] for _ in range(nl)]}  
+    df = {'dv': [[None for _ in range(nl-1)] for _ in range(nl-1)],   
           'dx': [[None for _ in range(nl-1)] for _ in range(nl-1)],  
           'dp': [[None for _ in range(nl-1)] for _ in range(nl-1)]}  
       
-    # Initialize Jacobian matrices  
-    for i in range(nl-1):  
-        for j in range(nl-1):  
-            dg['dv'][i+1][j] = sparse.csr_matrix((M[i].m, M[i].m))  
-            dg['dx'][i+1][j] = sparse.csr_matrix((M[i].m, M[i].n))  
-            dg['dp'][i+1][j] = sparse.csr_matrix((M[i].m, M[i].p))  
-            dg['dv'][i][j] = sparse.csr_matrix((M[i].l, M[i].m))  
-            dg['dx'][i][j] = sparse.csr_matrix((M[i].l, M[i].n))  
-            dg['dp'][i][j] = sparse.csr_matrix((M[i].l, M[i].p))  
-            df['dv'][i][j] = sparse.csr_matrix((M[i].n, M[i].m))  
-            df['dx'][i][j] = sparse.csr_matrix((M[i].n, M[i].n))  
-            df['dp'][i][j] = sparse.csr_matrix((M[i].n, M[i].p))  
+    # FIXED: Extract vectorized states for current time step  
+    # Get the first time step (column 0) from each derivative order  
+    v_vec = []  
+    x_vec = []  
+    z_vec = []  
+    w_vec = []  
       
-    # Partition states - FIXED: Use 2D shapes for sparse matrices  
+    for d in range(n):  
+        # Extract first column (time step 0) and convert to vector  
+        v_vec.append(spm_vec(u['v'][d][:, 0].toarray()))  
+        x_vec.append(spm_vec(u['x'][d][:, 0].toarray()))  
+        z_vec.append(spm_vec(u['z'][d][:, 0].toarray()))  
+        w_vec.append(spm_vec(u['w'][d][:, 0].toarray()))  
+      
+    # Concatenate all derivative orders  
+    v_cat = np.concatenate(v_vec)  
+    x_cat = np.concatenate(x_vec)  
+    z_cat = np.concatenate(z_vec)  
+    w_cat = np.concatenate(w_vec)  
+      
+    # Prepare templates with 2D shapes for sparse compatibility  
     vi_template = []  
     xi_template = []  
     ai_template = []  
@@ -199,7 +206,7 @@ def spm_DEM_diff(M, u, debug=False):
         # Handle x template  
         if hasattr(level, 'x') and level.x is not None:  
             if np.isscalar(level.x):  
-                xi_template.append(np.array([[level.x]]))  # 2D shape (1,1)  
+                xi_template.append(np.array([[level.x]]))  
             elif sparse.issparse(level.x):  
                 xi_template.append(level.x)  
             else:  
@@ -210,7 +217,7 @@ def spm_DEM_diff(M, u, debug=False):
         # Handle a template  
         if hasattr(level, 'a') and level.a is not None:  
             if np.isscalar(level.a):  
-                ai_template.append(np.array([[level.a]]))  # 2D shape (1,1)  
+                ai_template.append(np.array([[level.a]]))  
             elif sparse.issparse(level.a):  
                 ai_template.append(level.a)  
             else:  
@@ -218,38 +225,64 @@ def spm_DEM_diff(M, u, debug=False):
         else:  
             ai_template.append(sparse.csr_matrix((0, 0)))  
       
-    total_nv = sum([level.l for level in M])  
-    total_nx = sum([level.n for level in M])  
-      
     _debug_print(f"Template shapes - vi: {[item.shape for item in vi_template]}", None, debug)  
     _debug_print(f"Template shapes - xi: {[item.shape for item in xi_template]}", None, debug)  
       
-    # FIXED: Skip unvectorization if no causal states  
+    # Partition states using vectorized form  
+    total_nv = sum([level.l for level in M])  
+    total_nx = sum([level.n for level in M])  
+      
     if total_nv > 0:  
-        vi = spm_unvec(u['v'][0], vi_template)  
+        vi = spm_unvec(v_cat, vi_template)  
     else:  
         vi = vi_template  
       
-    xi = spm_unvec(u['x'][0], xi_template)  
+    xi = spm_unvec(x_cat, xi_template)  
+    ai = spm_unvec(v_cat, ai_template)  # Using v_cat for action states  
       
-    try:  
-        ai = spm_unvec(u['a'][0], ai_template)  
-    except:  
-        ai = ai_template  
-      
-    # Evaluate model at each level  
+    # Evaluate functions  
+    f = []  
+    g = []  
     for i in range(nl):  
+        if hasattr(M[i], 'f') and M[i].f is not None:  
+            f.append(M[i].f(xi[i], vi[i], M[i].pE))  
+        else:  
+            f.append(sparse.csr_matrix((0, 1)))  
+          
         if hasattr(M[i], 'g') and M[i].g is not None:  
-            try:  
-                y = M[i].g(xi[i], vi[i], M[i].pE)  
-                _debug_print(f"Level {i} g output: {y}", None, debug)  
-            except Exception as e:  
-                _debug_print(f"Level {i} g evaluation failed: {e}", None, debug)  
+            g.append(M[i].g(xi[i], vi[i], M[i].pE))  
+        else:  
+            g.append(sparse.csr_matrix((0, 1)))  
       
-    # Return updated states and Jacobians  
-    u['v'] = vi  
-    u['x'] = xi  
-    u['a'] = ai  
+    # Initialize Jacobian matrices  
+    for i in range(nl):  
+        for j in range(nl - 1):  
+            dg['dv'][i+1][j] = sparse.csr_matrix((M[i].m, M[i].m))  
+            dg['dx'][i+1][j] = sparse.csr_matrix((M[i].m, M[i].n))  
+            dg['dp'][i+1][j] = sparse.csr_matrix((M[i].m, M[i].p))  
+            dg['dv'][i][j] = sparse.csr_matrix((M[i].l, M[i].m))  
+            dg['dx'][i][j] = sparse.csr_matrix((M[i].l, M[i].n))  
+            dg['dp'][i][j] = sparse.csr_matrix((M[i].l, M[i].p))  
+              
+            if i < nl - 1:  
+                df['dv'][i][j] = sparse.csr_matrix((M[i].n, M[i].m))  
+                df['dx'][i][j] = sparse.csr_matrix((M[i].n, M[i].n))  
+                df['dp'][i][j] = sparse.csr_matrix((M[i].n, M[i].p))  
+      
+    # Set diagonal blocks  
+    for i in range(nl):  
+        if i < nl - 1:  
+            dg['dv'][i][i] = compute_jacobian(lambda v: M[i].g(xi[i], v, M[i].pE), vi[i], debug)  
+            dg['dx'][i][i] = compute_jacobian(lambda x: M[i].g(x, vi[i], M[i].pE), xi[i], debug)  
+            dg['dp'][i][i] = compute_jacobian(lambda p: M[i].g(xi[i], vi[i], p), M[i].pE, debug)  
+              
+            df['dv'][i][i] = compute_jacobian(lambda v: M[i].f(xi[i], v, M[i].pE), vi[i], debug)  
+            df['dx'][i][i] = compute_jacobian(lambda x: M[i].f(x, vi[i], M[i].pE), xi[i], debug)  
+            df['dp'][i][i] = compute_jacobian(lambda p: M[i].f(xi[i], vi[i], p), M[i].pE, debug)  
+      
+    # Constant terms  
+    for i in range(nl - 1):  
+        dg['dv'][i+1][i] = -sparse.eye(M[i].m, M[i].m)  
       
     _debug_print("spm_DEM_diff output", (u, dg, df), debug)  
     return u, dg, df
