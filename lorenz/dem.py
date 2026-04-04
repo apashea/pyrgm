@@ -766,6 +766,16 @@ def spm_DEM_embed(Y, n, t, dt, d=0, debug=False):
     """Temporal embedding into derivatives"""  
     _debug_print(f"spm_DEM_embed input: Y shape={Y[0].shape if hasattr(Y[0], 'shape') else 'N/A'}, n={n}", None, debug)  
       
+    # Handle sparse matrix input  
+    if sparse.issparse(Y):  
+        result = []  
+        for i in range(n):  
+            if i == 0:  
+                result.append(Y)  
+            else:  
+                result.append(sparse.csr_matrix(Y.shape))  
+        return result  
+      
     # Simplified implementation for data generation  
     # Full implementation would compute temporal derivatives  
     result = []  
