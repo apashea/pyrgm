@@ -1143,23 +1143,58 @@ def spm_DEM_embed(Y, n, t, dt, d=0, debug=False):
     if Y_dense.ndim == 1:  
         Y_dense = Y_dense.reshape(-1, 1)  
       
-    nt = len(t)  # number of time points  
-    ny = Y_dense.shape[0]  # number of variables  
+    ny, nt = Y_dense.shape  
       
-    _debug_print(f"Embedding: n={n}, nt={nt}, ny={ny}", None, debug)  
+    # Initialize output with n derivative orders (FIXED: was ny)  
+    y = [sparse.csr_matrix((ny, nt)) for _ in range(n)]  
       
-    # FIXED: Initialize result with n elements for each derivative order  
-    result = []  
+    # Create Taylor expansion matrix for derivatives  
+    # Using the approach from MATLAB's spm_DEM_embed  
+    T = np.zeros((n, n))  
     for i in range(n):  
-        if i == 0:  
-            # 0th derivative: original values  
-            result.append(sparse.csr_matrix(Y_dense))  
-        else:  
-            # Higher derivatives: initialize with zeros  
-            result.append(sparse.csr_matrix((ny, nt)))  
+        for j in range(n):  
+            if i == j:  
+                T[i, j] = 1.0  
+            else:  
+                T[i, j] = (dt**(j-i)) / math.factorial(j-i)  
       
-    _debug_print(f"spm_DEM_embed output: {len(result)} derivative orders", None, debug)  
-    return result
+    _debug_print(f"Taylor matrix T shape: {T.shape}, condition number: {np.linalg.cond(T):.2e}", None, debug)  
+      
+    # Handle singular matrix  
+    if np.linalg.cond(T) > 1e12:  
+        _debug_print("Using pseudo-inverse due to singular matrix", None, debug)  
+        E = np.linalg.pinv(T)  
+    else:  
+        E = np.linalg.inv(T)  
+      
+    # Embed derivatives for each time point  
+    for p in range(ny):  
+        for t_idx in range(nt):  
+            # Get neighborhood around current time point  
+            k = np.array([t_idx + d]) if isinstance(d, (int, np.integer)) else np.array([t_idx + d[p]])  
+              
+            # Ensure indices are within bounds  
+            k = np.clip(k, 0, nt - 1)  
+              
+            # Extract local time series  
+            if len(k) == n:  
+                Y_local = Y[p, k.astype(int)]  
+            else:  
+                # Pad with edge values if not enough points  
+                Y_local = np.zeros(n)  
+                Y_local[:len(k)] = Y[p, k.astype(int)]  
+                if len(k) < n:  
+                    Y_local[len(k):] = Y[p, k[-1]]  
+              
+            # Compute derivatives using embedding operator  
+            derivatives = E @ Y_local  
+              
+            # Store each derivative order  
+            for i in range(n):  
+                y[i][p, t_idx] = derivatives[i]  
+      
+    _debug_print(f"spm_DEM_embed output: {len(y)} derivatives", None, debug)  
+    return y
 
 def spm_kron(A, B):  
     """Kronecker tensor product with sparse outputs - matches MATLAB spm_kron"""  
