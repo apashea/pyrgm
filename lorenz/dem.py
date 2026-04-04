@@ -144,7 +144,7 @@ def spm_DEM_M_custom(model, debug=False, *varargs):
             if hasattr(x_state, 'flatten'):  
                 x_state = x_state.flatten()  
               
-            A = np.array([[-P_params[0], P_params[0], 0],    
+            A = np.array([[-P_params[0], P_params[0], 0],      
                          [P_params[2] - x_state[2], -1, -x_state[0]],  
                          [x_state[1], x_state[0], P_params[1]]])  
             return A @ x_state  
@@ -161,7 +161,7 @@ def spm_DEM_M_custom(model, debug=False, *varargs):
         M[0].g = lorenz_g  
           
         # FIXED: Precision matrices as proper sparse matrices  
-        M[0].V = sparse.csr_matrix(np.exp(0))  # V = 1.0  
+        M[0].V = sparse.csr_matrix(np.array([[1.0]]))  # V = 1.0  
         M[0].W = sparse.csr_matrix(np.exp(16) * np.eye(3))  # W = 8886110.520508 * I(3)  
           
         # Level 2: Static observation level  
@@ -170,7 +170,7 @@ def spm_DEM_M_custom(model, debug=False, *varargs):
         M[1].f = None  # No dynamics  
           
         # FIXED: Level 2 precision matrix as sparse matrix  
-        M[1].V = sparse.csr_matrix(np.exp(16))  # V = 8886110.520508  
+        M[1].V = sparse.csr_matrix(np.array([[np.exp(16)]]))  # V = 8886110.520508  
           
         # Set dimensions  
         M[0].n = 3  # 3 states for Lorenz  
@@ -178,7 +178,7 @@ def spm_DEM_M_custom(model, debug=False, *varargs):
         M[0].m = 1  # 1 input  
           
         M[1].n = 0  # No states  
-        M[1].l = 1  # 1 output    
+        M[1].l = 1  # 1 output      
         M[1].m = 0  # No inputs  
           
     else:  
@@ -188,7 +188,7 @@ def spm_DEM_M_custom(model, debug=False, *varargs):
     result = spm_DEM_M_set(M, debug=debug)  
     _debug_print("spm_DEM_M_custom output", result, debug)  
     return result
-  
+Fixed spm_DEM_M_set function
 def spm_DEM_M_set(M, debug=False):  
     """Set indices and perform checks on hierarchical models"""  
     g = len(M)  
@@ -285,13 +285,13 @@ def spm_DEM_M_set(M, debug=False):
             else:  
                 M[i].W = sparse.csr_matrix((0, 0))  
       
-    # Set estimation parameters  
+    # Set estimation parameters - CRITICAL FIX  
     nx = sum([level.n for level in M])  
       
     if not hasattr(M[0], 'E') or M[0].E is None:  
         M[0].E = type('E', (), {})()  
       
-    # KEY FIX: Changed E.s from 1/2 to 1/8 to match MATLAB's output of 0.125  
+    # Match MATLAB exactly  
     if not hasattr(M[0].E, 's'):  
         M[0].E.s = 1/8 if nx > 0 else 0  # MATLAB shows 0.125, not 0.5  
     if not hasattr(M[0].E, 'dt'):  
@@ -300,6 +300,46 @@ def spm_DEM_M_set(M, debug=False):
         M[0].E.d = 2 if nx > 0 else 0  
     if not hasattr(M[0].E, 'n'):  
         M[0].E.n = 6 if nx > 0 else 0  
+      
+    # Add missing fields that MATLAB has  
+    if not hasattr(M[0].E, 'linear'):  
+        M[0].E.linear = 1  
+    if not hasattr(M[0].E, 'nD'):  
+        M[0].E.nD = 1  
+    if not hasattr(M[0].E, 'nE'):  
+        M[0].E.nE = 8  
+    if not hasattr(M[0].E, 'nM'):  
+        M[0].E.nM = 8  
+    if not hasattr(M[0].E, 'nN'):  
+        M[0].E.nN = 32  
+      
+    # Initialize additional fields to match MATLAB  
+    for i in range(g):  
+        # Initialize missing fields with defaults  
+        if not hasattr(M[i], 'Q'):  
+            M[i].Q = None  
+        if not hasattr(M[i], 'R'):  
+            M[i].R = None  
+        if not hasattr(M[i], 'hE'):  
+            M[i].hE = sparse.csr_matrix((0, 1))  
+        if not hasattr(M[i], 'gE'):  
+            M[i].gE = sparse.csr_matrix((0, 1))  
+        if not hasattr(M[i], 'hC'):  
+            M[i].hC = sparse.csr_matrix((0, 0))  
+        if not hasattr(M[i], 'gC'):  
+            M[i].gC = sparse.csr_matrix((0, 0))  
+        if not hasattr(M[i], 'ph'):  
+            M[i].ph = sparse.csr_matrix((0, 0))  
+        if not hasattr(M[i], 'pg'):  
+            M[i].pg = sparse.csr_matrix((0, 0))  
+        if not hasattr(M[i], 'xP'):  
+            M[i].xP = sparse.csr_matrix((M[i].n, M[i].n))  
+        if not hasattr(M[i], 'vP'):  
+            M[i].vP = sparse.csr_matrix((M[i].l, M[i].l))  
+        if not hasattr(M[i], 'sv'):  
+            M[i].sv = M[0].E.s if hasattr(M[0], 'E') and M[0].E is not None else 0  
+        if not hasattr(M[i], 'sw'):  
+            M[i].sw = M[0].E.s if hasattr(M[0], 'E') and M[0].E is not None else 0  
       
     return M
   
@@ -409,7 +449,7 @@ def spm_DEM_z(M, N, debug=False):
 
     _debug_print("spm_DEM_z output", (z, w), debug)  
     return z, w  
-  
+
 def spm_DEM_int(M, z, w, u, debug=False):  
     """Integrate/evaluate a hierarchical model given innovations z{i} and w{i}"""  
     _debug_print("spm_DEM_int input", (M, z, w, u), debug)  
@@ -417,7 +457,7 @@ def spm_DEM_int(M, z, w, u, debug=False):
     # Set model indices and missing fields  
     M = spm_DEM_M_set(M, debug)  
       
-    # Keep z and w as lists (like MATLAB cell arrays) - DO NOT concatenate yet  
+    # Keep z and w as lists (like MATLAB cell arrays)  
     _debug_print("Keeping z and w as lists", None, debug)  
     _debug_print(f"z has {len(z)} levels", None, debug)  
     _debug_print(f"w has {len(w)} levels", None, debug)  
@@ -426,7 +466,7 @@ def spm_DEM_int(M, z, w, u, debug=False):
     m = len(M)  
     u_cell = []  
     for i in range(m):  
-        u_cell.append(sparse.csr_matrix((M[i].l, len(u[0].toarray()[0]) if hasattr(u[0], 'toarray') else 1024)))  
+        u_cell.append(sparse.csr_matrix((M[i].l, u[0].shape[1])))  
     u_cell[m-1] = u[0]  # Last level gets the input  
       
     # Number of time steps  
@@ -446,88 +486,67 @@ def spm_DEM_int(M, z, w, u, debug=False):
           
         # Initial conditions  
         if M[i].v is not None:  
-            V[i][:, 0] = M[i].v  
+            if sparse.issparse(M[i].v):  
+                V[i][:, 0] = M[i].v.toarray().flatten()  
+            else:  
+                V[i][:, 0] = M[i].v  
         if M[i].x is not None:  
-            X[i][:, 0] = M[i].x  
+            if sparse.issparse(M[i].x):  
+                X[i][:, 0] = M[i].x.toarray().flatten()  
+            else:  
+                X[i][:, 0] = M[i].x  
       
     # Generalized filtering parameters  
     dE = M[0].E.d if hasattr(M[0], 'E') and M[0].E is not None else 2  
     nE = M[0].E.n if hasattr(M[0], 'E') and M[0].E is not None else 6  
     dt = M[0].E.dt if hasattr(M[0], 'E') and M[0].E is not None else 1  
       
-    # Initialize generalized states  
-    gE = sparse.csr_matrix((sum(M[i].l * (dE + 1) for i in range(m)), N))  
-    gF = sparse.csr_matrix((sum(M[i].n * (nE + 1) for i in range(m)), N))  
-      
-    # Time integration loop  
+    # Time integration loop - simplified approach matching MATLAB  
     for t in range(N):  
-        # Update generalized states  
-        for i in range(m):  
-            if M[i].l > 0 and V[i][:, t].nnz > 0:  
-                start_idx = sum(M[j].l * (dE + 1) for j in range(i))  
-                end_idx = start_idx + M[i].l * (dE + 1)  
-                gE[start_idx:end_idx, t] = V[i][:, t]  
-              
-            if M[i].n > 0 and X[i][:, t].nnz > 0:  
-                start_idx = sum(M[j].n * (nE + 1) for j in range(i))  
-                end_idx = start_idx + M[i].n * (nE + 1)  
-                gF[start_idx:end_idx, t] = X[i][:, t]  
-          
-        # Update innovations for this time step  
-        for i in range(m):  
-            # FIXED: Check if z is a list and access correctly  
-            if isinstance(z, list) and i < len(z) and z[i] is not None:  
-                if hasattr(z[i], 'shape') and z[i].shape[1] > t:  
-                    z_start = i * M[i].l * (dE + 1)  
-                    z_end = (i + 1) * M[i].l * (dE + 1)  
-                    gE[:, z_start:z_end] = z[i][:, t]  
-              
-            if isinstance(w, list) and i < len(w) and w[i] is not None:  
-                if hasattr(w[i], 'shape') and w[i].shape[1] > t:  
-                    w_start = i * M[i].n * (nE + 1)  
-                    w_end = (i + 1) * M[i].n * (nE + 1)  
-                    gF[:, w_start:w_end] = w[i][:, t]  
-          
         # Simple Euler integration for each level  
         for i in range(m):  
             if t < N - 1:  
                 # Update causal states  
                 if hasattr(M[i].g, '__call__'):  
-                    # FIXED: Flatten arrays to 1D vectors  
-                    x_state = X[i][:, t].toarray().flatten()  
-                    v_state = V[i][:, t].toarray().flatten()  
+                    x_state = X[i][:, t].toarray().flatten() if X[i][:, t].nnz > 0 else np.zeros(M[i].n)  
+                    v_state = V[i][:, t].toarray().flatten() if V[i][:, t].nnz > 0 else np.zeros(M[i].l)  
                     v_new = M[i].g(x_state, v_state, M[i].pE)  
                     if isinstance(v_new, np.ndarray) and v_new.size > 0:  
                         V[i][:, t+1] = v_new  
                   
                 # Update hidden states  
                 if hasattr(M[i].f, '__call__'):  
-                    # FIXED: Flatten arrays to 1D vectors  
-                    x_state = X[i][:, t].toarray().flatten()  
-                    v_state = V[i][:, t].toarray().flatten()  
+                    x_state = X[i][:, t].toarray().flatten() if X[i][:, t].nnz > 0 else np.zeros(M[i].n)  
+                    v_state = V[i][:, t].toarray().flatten() if V[i][:, t].nnz > 0 else np.zeros(M[i].l)  
                     x_new = M[i].f(x_state, v_state, M[i].pE)  
                     if isinstance(x_new, np.ndarray) and x_new.size > 0:  
                         X[i][:, t+1] = X[i][:, t] + dt * x_new  
                         if i < len(w) and w[i] is not None and hasattr(w[i], 'shape') and w[i].shape[1] > t:  
-                            X[i][:, t+1] = X[i][:, t+1] + w[i][:, t].reshape(-1, 1)  
+                            if sparse.issparse(w[i]):  
+                                w_col = w[i][:, t].toarray().flatten()  
+                            else:  
+                                w_col = w[i][:, t]  
+                            if w_col.size > 0:  
+                                X[i][:, t+1] = X[i][:, t+1] + w_col.reshape(-1, 1)  
                   
                 # Add innovations  
                 if isinstance(z, list) and i < len(z) and z[i] is not None:  
                     if hasattr(z[i], 'shape') and z[i].shape[1] > t:  
-                        V[i][:, t+1] = V[i][:, t+1] + z[i][:, t]  
+                        if sparse.issparse(z[i]):  
+                            z_col = z[i][:, t].toarray().flatten()  
+                        else:  
+                            z_col = z[i][:, t]  
+                        if z_col.size > 0:  
+                            V[i][:, t+1] = V[i][:, t+1] + z_col  
           
-        # Save realization - FIXED: Handle empty arrays properly  
+        # Save realization  
         for i in range(m):  
             if M[i].l > 0:  
                 if V[i][:, t].nnz > 0:  
-                    vec_result = spm_vec(V[i][:, t].toarray())  
-                    if len(vec_result) > 0:  
-                        Z[i][:, t] = vec_result  
+                    Z[i][:, t] = V[i][:, t]  
             if M[i].n > 0:  
                 if X[i][:, t].nnz > 0:  
-                    vec_result = spm_vec(X[i][:, t].toarray())  
-                    if len(vec_result) > 0:  
-                        W[i][:, t] = vec_result  
+                    W[i][:, t] = X[i][:, t]  
       
     _debug_print("spm_DEM_int output", (V, X, Z, W), debug)  
     return V, X, Z, W
