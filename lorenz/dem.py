@@ -329,7 +329,7 @@ def spm_cat(x, d=None, debug=False):
     if d is not None:  
         _debug_print(f"spm_cat: dimension argument {d} not implemented", None, debug)  
       
-    # Convert all to sparse matrices - FIXED: Check if already sparse  
+    # Convert all to sparse matrices - FIXED: Handle type checking properly  
     matrices = []  
     for item in x:  
         if item is None:  
@@ -337,9 +337,23 @@ def spm_cat(x, d=None, debug=False):
         elif sparse.issparse(item):  
             # Already sparse, just ensure CSR format  
             matrices.append(item.tocsr())  
+        elif isinstance(item, np.ndarray):  
+            # Handle numpy arrays  
+            if item.size == 0:  
+                matrices.append(sparse.csr_matrix(item.shape))  
+            else:  
+                matrices.append(sparse.csr_matrix(item))  
         else:  
-            # Convert to sparse  
-            matrices.append(sparse.csr_matrix(item))  
+            # Handle other types (scalars, etc.)  
+            try:  
+                # Convert to numpy array first to avoid boolean evaluation  
+                item_array = np.array(item)  
+                if item_array.size == 0:  
+                    matrices.append(sparse.csr_matrix((0, 0)))  
+                else:  
+                    matrices.append(sparse.csr_matrix(item_array))  
+            except:  
+                matrices.append(sparse.csr_matrix((0, 0)))  
       
     if not matrices:  
         return sparse.csr_matrix((0, 0))  
