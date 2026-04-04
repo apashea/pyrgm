@@ -458,113 +458,116 @@ def spm_DEM_int(M, z, w, u, debug=False):
     # Set model indices and missing fields  
     M = spm_DEM_M_set(M, debug)  
       
-    # Keep z and w as lists (like MATLAB cell arrays)  
-    _debug_print("Keeping z and w as lists", None, debug)  
-    _debug_print(f"z has {len(z)} levels", None, debug)  
-    _debug_print(f"w has {len(w)} levels", None, debug)  
+    # Concatenate innovations and causes  
+    z_cat = spm_cat(z) + spm_cat(u)  
+    w_cat = spm_cat(w)  
       
-    # Place exogenous causes in cell array  
-    m = len(M)  
-    u_cell = []  
-    for i in range(m):  
-        u_cell.append(sparse.csr_matrix((M[i].l, u[0].shape[1])))  
-    u_cell[m-1] = u[0]  # Last level gets the input  
+    # Get dimensions  
+    nt = z_cat.shape[1]  # number of time steps  
+    nl = len(M)          # number of levels  
+    nv = sum([level.l for level in M])  # number of v (causal states)  
+    nx = sum([level.n for level in M])  # number of x (hidden states)  
       
-    # Number of time steps  
-    N = z[0].shape[1] if z and z[0] is not None else 1024  
+    # Order parameters  
+    dt = M[0].E.dt  
+    n = M[0].E.n + 1  # order of embedding  
+    nD = M[0].E.nD if hasattr(M[0].E, 'nD') else 1  # iterations per sample  
+    td = dt / nD  
       
-    # Initialize response and hidden states  
+    # Initialize generalized states  
+    u_states = {}  
+    u_states['v'] = [sparse.csr_matrix((nv, 1)) for _ in range(n)]  
+    u_states['x'] = [sparse.csr_matrix((nx, 1)) for _ in range(n)]  
+    u_states['z'] = [sparse.csr_matrix((nv, 1)) for _ in range(n)]  
+    u_states['w'] = [sparse.csr_matrix((nx, 1)) for _ in range(n)]  
+      
+    # Set initial conditions  
+    vi = [level.v if hasattr(level, 'v') and level.v is not None else 0 for level in M]  
+    xi = [level.x if hasattr(level, 'x') and level.x is not None else 0 for level in M]  
+    u_states['v'][0] = spm_vec(vi)  
+    u_states['x'][0] = spm_vec(xi)  
+      
+    # Derivative operators for Jacobian  
+    Dx = kron(speye(n, n, 1), speye(nx, nx, 0))  
+    Dv = kron(speye(n, n, 1), speye(nv, nv, 0))  
+    D = spm_cat([Dv, Dx, Dv, Dx])  
+    dfdw = kron(np.eye(n), np.eye(nx))  
+      
+    # Initialize output arrays  
     V = []  
     X = []  
     Z = []  
     W = []  
+    for i in range(nl):  
+        V.append(sparse.csr_matrix((M[i].l, nt)))  
+        X.append(sparse.csr_matrix((M[i].n, nt)))  
+        Z.append(sparse.csr_matrix((M[i].l, nt)))  
+        W.append(sparse.csr_matrix((M[i].n, nt)))  
       
-    for i in range(m):  
-        V.append(sparse.csr_matrix((M[i].l, N)))  
-        X.append(sparse.csr_matrix((M[i].n, N)))  
-        Z.append(sparse.csr_matrix((M[i].l, N)))  
-        W.append(sparse.csr_matrix((M[i].n, N)))  
-          
-        # Initial conditions  
-        if M[i].v is not None:  
-            if sparse.issparse(M[i].v):  
-                V[i][:, 0] = M[i].v.toarray().flatten()  
-            else:  
-                V[i][:, 0] = M[i].v  
-        if M[i].x is not None:  
-            if sparse.issparse(M[i].x):  
-                X[i][:, 0] = M[i].x.toarray().flatten()  
-            else:  
-                X[i][:, 0] = M[i].x  
+    # Check for state-dependent precision  
+    mnx = any(hasattr(level, 'pg') and level.pg is not None for level in M)  
+    mnv = any(hasattr(level, 'ph') and level.ph is not None for level in M)  
       
-    # Generalized filtering parameters  
-    dE = M[0].E.d if hasattr(M[0], 'E') and M[0].E is not None else 2  
-    nE = M[0].E.n if hasattr(M[0], 'E') and M[0].E is not None else 6  
-    dt = M[0].E.dt if hasattr(M[0], 'E') and M[0].E is not None else 1  
+    # Default precision matrices  
+    Sz = 1  
+    Sw = 1  
       
-    # Time integration using MATLAB's matrix exponential approach  
-    for t in range(N):  
-        for i in range(m):  
-            if t < N - 1:  
-                # Update causal states  
-                if hasattr(M[i].g, '__call__'):  
-                    x_state = X[i][:, t].toarray().flatten() if X[i][:, t].nnz > 0 else np.zeros(M[i].n)  
-                    v_state = V[i][:, t].toarray().flatten() if V[i][:, t].nnz > 0 else np.zeros(M[i].l)  
-                    v_new = M[i].g(x_state, v_state, M[i].pE)  
-                    if isinstance(v_new, np.ndarray) and v_new.size > 0:  
-                        V[i][:, t+1] = v_new  
+    # Main integration loop  
+    for t in range(nt):  
+        for iD in range(nD):  
+            # Sampling time  
+            ts = (t + (iD - 1)/nD) * dt  
+              
+            # Evaluate state-dependent precision (simplified)  
+            if mnx or mnv:  
+                # For now, use identity matrices  
+                if mnv:  
+                    Sz = sparse.eye(nv)  
+                if mnx:  
+                    Sw = sparse.eye(nx)  
+              
+            # Temporal embedding of innovations  
+            u_states['z'] = spm_DEM_embed(Sz * z_cat, n, ts, dt)  
+            u_states['w'] = spm_DEM_embed(Sw * w_cat, n, ts, dt)  
+              
+            # Evaluate functions and derivatives  
+            u_eval, dg, df = spm_DEM_diff(M, u_states)  
+              
+            # Build Jacobian  
+            dgdv = kron(speye(n, n, 1), dg['dv'])  
+            dgdx = kron(speye(n, n, 1), dg['dx'])  
+            dfdv = kron(speye(n, n, 0), df['dv'])  
+            dfdx = kron(speye(n, n, 0), df['dx'])  
+              
+            J = spm_cat([  
+                [dgdv, dgdx, Dv, None],  
+                [dfdv, dfdx, None, dfdw],  
+                [None, None, Dv, None],  
+                [None, None, None, Dx]  
+            ])  
+              
+            # Save realization (first iteration only)  
+            if iD == 0:  
+                vi = spm_unvec(u_states['v'][0], vi)  
+                xi = spm_unvec(u_states['x'][0], xi)  
+                zi = spm_unvec(u_states['z'][0], vi)  
+                wi = spm_unvec(u_states['w'][0], xi)  
                   
-                # Update hidden states using matrix exponential (MATLAB approach)  
-                if hasattr(M[i].f, '__call__'):  
-                    x_state = X[i][:, t].toarray().flatten() if X[i][:, t].nnz > 0 else np.zeros(M[i].n)  
-                    v_state = V[i][:, t].toarray().flatten() if V[i][:, t].nnz > 0 else np.zeros(M[i].l)  
-                      
-                    # Compute Jacobian J = df/dx at current state  
-                    J = compute_jacobian(M[i].f, x_state, v_state, M[i].pE)  
-                      
-                    # Compute f(x)  
-                    f_val = M[i].f(x_state, v_state, M[i].pE)  
-                      
-                    # Matrix exponential update: x(t+dt) = x(t) + (expm(dt*J) - I)*inv(J)*f  
-                    try:  
-                        expJ = expm(dt * J)  
-                        U_matrix = np.linalg.solve(J, (expJ - np.eye(len(J))))  
-                        x_update = U_matrix @ f_val  
-                        X[i][:, t+1] = X[i][:, t] + x_update.reshape(-1, 1)  
-                    except:  
-                        # Fallback to Euler if matrix operations fail  
-                        X[i][:, t+1] = X[i][:, t] + dt * f_val.reshape(-1, 1)  
-                      
-                    # Add state noise  
-                    if i < len(w) and w[i] is not None and hasattr(w[i], 'shape') and w[i].shape[1] > t:  
-                        if sparse.issparse(w[i]):  
-                            w_col = w[i][:, t].toarray().flatten()  
-                        else:  
-                            w_col = w[i][:, t]  
-                        if w_col.size > 0:  
-                            X[i][:, t+1] = X[i][:, t+1] + w_col.reshape(-1, 1)  
-                  
-                # Add innovations  
-                if isinstance(z, list) and i < len(z) and z[i] is not None:  
-                    if hasattr(z[i], 'shape') and z[i].shape[1] > t:  
-                        if sparse.issparse(z[i]):  
-                            z_col = z[i][:, t].toarray().flatten()  
-                        else:  
-                            z_col = z[i][:, t]  
-                        if z_col.size > 0:  
-                            V[i][:, t+1] = V[i][:, t+1] + z_col  
-          
-        # Save realization  
-        for i in range(m):  
-            if M[i].l > 0:  
-                if V[i][:, t].nnz > 0:  
-                    Z[i][:, t] = V[i][:, t]  
-            if M[i].n > 0:  
-                if X[i][:, t].nnz > 0:  
-                    W[i][:, t] = X[i][:, t]  
+                for i in range(nl):  
+                    if M[i].l > 0:  
+                        V[i][:, t] = spm_vec(vi[i])  
+                        Z[i][:, t] = spm_vec(zi[i])  
+                    if M[i].n > 0:  
+                        X[i][:, t] = spm_vec(xi[i])  
+                        W[i][:, t] = spm_vec(wi[i])  
+              
+            # Update states using spm_dx  
+            du = spm_dx(J, D * spm_vec(u_states), td)  
+            u_vec = spm_vec(u_states) + du  
+            u_states = spm_unvec(u_vec, u_states)  
       
     _debug_print("spm_DEM_int output", (V, X, Z, W), debug)  
-    return V, X, Z, W  
+    return V, X, Z, W
   
 def compute_jacobian(f, x, v, p):  
     """Compute Jacobian df/dx numerically"""  
