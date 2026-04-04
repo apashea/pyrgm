@@ -475,40 +475,60 @@ def spm_DEM_int(M, z, w, u, debug=False):
     # Set model indices and missing fields  
     M = spm_DEM_M_set(M, debug)  
       
-    # Concatenate innovations and causes - FIXED: Handle shape mismatch  
+    # Concatenate innovations and causes - FIXED: Ensure correct dimensions  
     z_cat = spm_cat(z)  
     u_cat = spm_cat(u)  
       
-    # Ensure shapes match before addition  
-    if z_cat.shape != u_cat.shape:  
-        _debug_print(f"Shape mismatch: z_cat.shape={z_cat.shape}, u_cat.shape={u_cat.shape}", None, debug)  
-        # Pad the smaller matrix or truncate to match  
-        min_rows = min(z_cat.shape[0], u_cat.shape[0])  
-        min_cols = min(z_cat.shape[1], u_cat.shape[1])  
-          
-        if z_cat.shape[0] > min_rows:  
-            z_cat = z_cat[:min_rows, :]  
-        if u_cat.shape[0] > min_rows:  
-            u_cat = u_cat[:min_rows, :]  
-        if z_cat.shape[1] > min_cols:  
-            z_cat = z_cat[:, :min_cols]  
-        if u_cat.shape[1] > min_cols:  
-            u_cat = u_cat[:, :min_cols]  
+    # Calculate expected dimensions  
+    nv = sum([level.l for level in M])  # total causal states  
+    nx = sum([level.n for level in M])  # total hidden states  
+      
+    _debug_print(f"Expected dimensions: nv={nv}, nx={nx}", None, debug)  
+    _debug_print(f"z_cat.shape={z_cat.shape}, u_cat.shape={u_cat.shape}", None, debug)  
+      
+    # Ensure z_cat and u_cat have correct dimensions  
+    if z_cat.shape[0] != nv:  
+        _debug_print(f"Reshaping z_cat from {z_cat.shape} to ({nv}, {z_cat.shape[1]})", None, debug)  
+        if z_cat.shape[0] > nv:  
+            z_cat = z_cat[:nv, :]  
+        else:  
+            # Pad with zeros if needed  
+            pad_rows = nv - z_cat.shape[0]  
+            z_cat = sparse.vstack([z_cat, sparse.csr_matrix((pad_rows, z_cat.shape[1]))])  
+      
+    if u_cat.shape[0] != nv:  
+        _debug_print(f"Reshaping u_cat from {u_cat.shape} to ({nv}, {u_cat.shape[1]})", None, debug)  
+        if u_cat.shape[0] > nv:  
+            u_cat = u_cat[:nv, :]  
+        else:  
+            # Pad with zeros if needed  
+            pad_rows = nv - u_cat.shape[0]  
+            u_cat = sparse.vstack([u_cat, sparse.csr_matrix((pad_rows, u_cat.shape[1]))])  
       
     z_cat = z_cat + u_cat  
     w_cat = spm_cat(w)  
       
+    # Ensure w_cat has correct dimensions  
+    if w_cat.shape[0] != nx:  
+        _debug_print(f"Reshaping w_cat from {w_cat.shape} to ({nx}, {w_cat.shape[1]})", None, debug)  
+        if w_cat.shape[0] > nx:  
+            w_cat = w_cat[:nx, :]  
+        else:  
+            # Pad with zeros if needed  
+            pad_rows = nx - w_cat.shape[0]  
+            w_cat = sparse.vstack([w_cat, sparse.csr_matrix((pad_rows, w_cat.shape[1]))])  
+      
     # Get dimensions  
     nt = z_cat.shape[1]  # number of time steps  
     nl = len(M)          # number of levels  
-    nv = sum([level.l for level in M])  # number of v (causal states)  
-    nx = sum([level.n for level in M])  # number of x (hidden states)  
       
     # Order parameters  
     dt = M[0].E.dt  
     n = M[0].E.n + 1  # order of embedding  
     nD = M[0].E.nD if hasattr(M[0].E, 'nD') else 1  # iterations per sample  
     td = dt / nD  
+      
+    _debug_print(f"Integration parameters: dt={dt}, n={n}, nD={nD}, td={td}", None, debug)  
       
     # Initialize generalized states  
     u_states = {}  
@@ -518,10 +538,28 @@ def spm_DEM_int(M, z, w, u, debug=False):
     u_states['w'] = [sparse.csr_matrix((nx, 1)) for _ in range(n)]  
       
     # Set initial conditions  
-    vi = [level.v if hasattr(level, 'v') and level.v is not None else 0 for level in M]  
-    xi = [level.x if hasattr(level, 'x') and level.x is not None else 0 for level in M]  
-    u_states['v'][0] = spm_vec(vi)  
-    u_states['x'][0] = spm_vec(xi)  
+    vi = [level.v if hasattr(level, 'v') and level.v is not None else   
+          sparse.csr_matrix((level.l, 1)) for level in M]  
+    xi = [level.x if hasattr(level, 'x') and level.x is not None else   
+          sparse.csr_matrix((level.n, 1)) for level in M]  
+      
+    # Initialize output arrays  
+    V = []  
+    X = []  
+    Z = []  
+    W = []  
+      
+    for i in range(nl):  
+        V.append(sparse.csr_matrix((M[i].l, nt)))  
+        X.append(sparse.csr_matrix((M[i].n, nt)))  
+        Z.append(sparse.csr_matrix((M[i].l, nt)))  
+        W.append(sparse.csr_matrix((M[i].n, nt)))  
+      
+    # Precision matrices  
+    Sz = spm_cat([level.V for level in M if hasattr(level, 'V') and level.V is not None])  
+    Sw = spm_cat([level.W for level in M if hasattr(level, 'W') and level.W is not None])  
+      
+    _debug_print(f"Precision matrices: Sz.shape={Sz.shape}, Sw.shape={Sw.shape}", None, debug)  
       
     # Derivative operators for Jacobian  
     Dx = spm_kron(speye(n, n, 1), speye(nx, nx, 0))  
@@ -529,45 +567,25 @@ def spm_DEM_int(M, z, w, u, debug=False):
     D = spm_cat([Dv, Dx, Dv, Dx])  
     dfdw = spm_kron(np.eye(n), np.eye(nx))  
       
-    # Initialize output arrays  
-    V = []  
-    X = []  
-    Z = []  
-    W = []  
-    for i in range(nl):  
-        V.append(sparse.csr_matrix((M[i].l, nt)))  
-        X.append(sparse.csr_matrix((M[i].n, nt)))  
-        Z.append(sparse.csr_matrix((M[i].l, nt)))  
-        W.append(sparse.csr_matrix((M[i].n, nt)))  
+    _debug_print(f"Derivative operators: Dx.shape={Dx.shape}, Dv.shape={Dv.shape}", None, debug)  
       
-    # Check for state-dependent precision  
-    mnx = any(hasattr(level, 'pg') and level.pg is not None for level in M)  
-    mnv = any(hasattr(level, 'ph') and level.ph is not None for level in M)  
-      
-    # Default precision matrices  
-    Sz = 1  
-    Sw = 1  
-      
-    # Main integration loop  
+    # Time integration loop  
     for t in range(nt):  
+        _debug_print(f"Time step {t}/{nt}", None, debug)  
+          
+        # Temporal embedding of innovations  
+        u_states['z'] = spm_DEM_embed(Sz * z_cat, n, t, dt)  
+        u_states['w'] = spm_DEM_embed(Sw * w_cat, n, t, dt)  
+          
+        # Set initial states for first time step  
+        if t == 0:  
+            u_states['v'][0] = spm_cat(vi)  
+            u_states['x'][0] = spm_cat(xi)  
+          
+        # Multiple iterations per time step (D-Step)  
         for iD in range(nD):  
-            # Sampling time  
-            ts = (t + (iD - 1)/nD) * dt  
-              
-            # Evaluate state-dependent precision (simplified)  
-            if mnx or mnv:  
-                # For now, use identity matrices  
-                if mnv:  
-                    Sz = sparse.eye(nv)  
-                if mnx:  
-                    Sw = sparse.eye(nx)  
-              
-            # Temporal embedding of innovations  
-            u_states['z'] = spm_DEM_embed(Sz * z_cat, n, ts, dt)  
-            u_states['w'] = spm_DEM_embed(Sw * w_cat, n, ts, dt)  
-              
             # Evaluate functions and derivatives  
-            u_eval, dg, df = spm_DEM_diff(M, u_states)  
+            [u, dg, df] = spm_DEM_diff(M, u_states)  
               
             # Build Jacobian  
             dgdv = spm_kron(speye(n, n, 1), dg['dv'])  
