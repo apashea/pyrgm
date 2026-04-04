@@ -919,11 +919,11 @@ def spm_DEM_int(M, z, w, u, debug=False):
         for iD in range(nD):  
             # Evaluate model at current time  
             u_t = {    
-                'v': [u_states['v'][d][:, t] for d in range(n)],  
-                'x': [u_states['x'][d][:, t] for d in range(n)],  
-                'z': [u_states['z'][d][:, t] for d in range(n)],  
-                'w': [u_states['w'][d][:, t] for d in range(n)]  
-            }  
+                'v': [u_states['v'][d] for d in range(n)],  
+                'x': [u_states['x'][d] for d in range(n)],  
+                'z': [u_states['z'][d] for d in range(n)],  
+                'w': [u_states['w'][d] for d in range(n)]  
+            }
               
             # Compute derivatives  
             u, dg, df = spm_DEM_diff(M, u_t, debug)  
