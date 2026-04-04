@@ -188,7 +188,8 @@ def spm_DEM_M_custom(model, debug=False, *varargs):
     result = spm_DEM_M_set(M, debug=debug)  
     _debug_print("spm_DEM_M_custom output", result, debug)  
     return result
-Fixed spm_DEM_M_set function
+
+
 def spm_DEM_M_set(M, debug=False):  
     """Set indices and perform checks on hierarchical models"""  
     g = len(M)  
