@@ -815,7 +815,8 @@ def spm_DEM_int(M, z, w, u, debug=False):
     M = spm_DEM_M_set(M, debug)  
       
     # Concatenate innovations and causes  
-    z_cat = spm_cat(z)  
+    z_cat = spm_cat(z)
+    w_cat = spm_cat(w)
     u_cat = spm_cat(u)  
       
     # Calculate expected dimensions  
