@@ -507,10 +507,10 @@ def spm_DEM_int(M, z, w, u, debug=False):
     u_states['x'][0] = spm_vec(xi)  
       
     # Derivative operators for Jacobian  
-    Dx = kron(speye(n, n, 1), speye(nx, nx, 0))  
-    Dv = kron(speye(n, n, 1), speye(nv, nv, 0))  
+    Dx = spm_kron(speye(n, n, 1), speye(nx, nx, 0))  
+    Dv = spm_kron(speye(n, n, 1), speye(nv, nv, 0))  
     D = spm_cat([Dv, Dx, Dv, Dx])  
-    dfdw = kron(np.eye(n), np.eye(nx))  
+    dfdw = spm_kron(np.eye(n), np.eye(nx))  
       
     # Initialize output arrays  
     V = []  
@@ -553,10 +553,10 @@ def spm_DEM_int(M, z, w, u, debug=False):
             u_eval, dg, df = spm_DEM_diff(M, u_states)  
               
             # Build Jacobian  
-            dgdv = kron(speye(n, n, 1), dg['dv'])  
-            dgdx = kron(speye(n, n, 1), dg['dx'])  
-            dfdv = kron(speye(n, n, 0), df['dv'])  
-            dfdx = kron(speye(n, n, 0), df['dx'])  
+            dgdv = spm_kron(speye(n, n, 1), dg['dv'])  
+            dgdx = spm_kron(speye(n, n, 1), dg['dx'])  
+            dfdv = spm_kron(speye(n, n, 0), df['dv'])  
+            dfdx = spm_kron(speye(n, n, 0), df['dx'])  
               
             J = spm_cat([  
                 [dgdv, dgdx, Dv, None],  
@@ -683,6 +683,24 @@ def spm_DEM_embed(Y, n, t, dt, d=0, debug=False):
       
     _debug_print(f"spm_DEM_embed output: {len(result)} levels", None, debug)  
     return result
+
+def spm_kron(A, B):  
+    """Kronecker tensor product with sparse outputs - matches MATLAB spm_kron"""  
+    if isinstance(A, list):  
+        # Handle cell array input  
+        K = 1  
+        for i in range(len(A)):  
+            K = spm_kron(A[i], K)  
+        return K  
+      
+    # Convert to sparse if not already  
+    if not sparse.issparse(A):  
+        A = sparse.csr_matrix(A)  
+    if not sparse.issparse(B):  
+        B = sparse.csr_matrix(B)  
+      
+    # Use scipy's kron for sparse matrices  
+    return sparse.kron(A, B)  
 
 def format_value_for_display(val, name=""):  
     """Helper function to format values for display, handling scalars and arrays"""  
