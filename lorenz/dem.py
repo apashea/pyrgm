@@ -637,6 +637,23 @@ def spm_DEM_embed(Y, n, t, dt, d=0, debug=False):
     _debug_print(f"spm_DEM_embed output: {len(result)} levels", None, debug)  
     return result
 
+def format_value_for_display(val, name=""):  
+    """Helper function to format values for display, handling scalars and arrays"""  
+    if np.isscalar(val):  
+        return f"{val:.6f}"  
+    elif hasattr(val, 'toarray'):  
+        # Handle sparse matrices  
+        val_array = val.toarray().flatten()  
+        if len(val_array) > 0:  
+            return " ".join([f"{v:.6f}" for v in val_array])  
+        else:  
+            return ""  
+    elif hasattr(val, '__len__') and len(val) > 0:  
+        # Handle dense arrays  
+        return " ".join([f"{v:.6f}" for v in val])  
+    else:  
+        return ""
+
 # Main execution function  
 def generate_lorenz_data(debug=False):  
     """Equivalent to the MATLAB code provided"""  
