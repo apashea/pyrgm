@@ -138,15 +138,16 @@ def spm_DEM_diff(M, u, debug=False):
           'dp': [[None for _ in range(nl-1)] for _ in range(nl)]}  
     df = {'dv': [[None for _ in range(nl-1)] for _ in range(nl)],  
           'dx': [[None for _ in range(nl-1)] for _ in range(nl)],  
-          'dp': [[None for _ in range(nl-1)] for _ in range(nl)]}  
+          'dp': [[None for _ in range(nl-1)] for _ in range(nl)],  
+          'dw': [[None for _ in range(nl-1)] for _ in range(nl)]}  
       
-    # Partition states - FIXED: Convert scalars to arrays in templates  
+    # Partition states - FIXED: Templates specify per-time-step structure  
     vi_template = []  
     xi_template = []  
     ai_template = []  
       
     for level in M:  
-        # Handle v template  
+        # Handle v template - per-time-step structure  
         if hasattr(level, 'v') and level.v is not None:  
             if np.isscalar(level.v):  
                 vi_template.append(np.array([level.v]))  # Shape (1,) per time step  
@@ -157,7 +158,7 @@ def spm_DEM_diff(M, u, debug=False):
         else:  
             vi_template.append(np.array([]))  
           
-        # Handle x template  
+        # Handle x template - per-time-step structure  
         if hasattr(level, 'x') and level.x is not None:  
             if np.isscalar(level.x):  
                 xi_template.append(np.array([level.x]))  
@@ -168,7 +169,7 @@ def spm_DEM_diff(M, u, debug=False):
         else:  
             xi_template.append(np.array([]))  
           
-        # Handle a template  
+        # Handle a template - per-time-step structure  
         if hasattr(level, 'a') and level.a is not None:  
             if np.isscalar(level.a):  
                 ai_template.append(np.array([level.a]))  
@@ -181,72 +182,63 @@ def spm_DEM_diff(M, u, debug=False):
       
     _debug_print(f"Template shapes: vi={[t.shape for t in vi_template]}", None, debug)  
     _debug_print(f"Template shapes: xi={[t.shape for t in xi_template]}", None, debug)  
+    _debug_print(f"Template shapes: ai={[t.shape for t in ai_template]}", None, debug)  
       
+    # Unvectorize states  
     vi = spm_unvec(u['v'][0], vi_template)  
     xi = spm_unvec(u['x'][0], xi_template)  
     ai = spm_unvec(u['a'][0], ai_template)  
       
-    # Update states  
-    for i in range(nl):  
-        if M[i].l > 0:  
-            u['v'][i] = spm_vec(vi[i])  
-        if M[i].n > 0:  
-            u['x'][i] = spm_vec(xi[i])  
-        if M[i].k > 0:  
-            u['a'][i] = spm_vec(ai[i])  
+    # Update u with unvectorized states  
+    u['v'][0] = vi  
+    u['x'][0] = xi  
+    u['a'][0] = ai  
       
-    # Evaluate generative process for each level  
+    # Evaluate model at each level  
     for i in range(nl - 1):  
-        if i == 0:  
-            # Level 0: Lorenz dynamics  
-            g_val = M[i].g(xi[i], vi[i], M[i].pE)  
-            f_val = M[i].f(xi[i], vi[i], M[i].pE)  
-        else:  
-            # Higher levels: identity mappings  
-            g_val = vi[i]  
-            f_val = np.zeros_like(xi[i])  
-          
-        # Store in u structure  
-        u['g'][i] = g_val  
-        u['f'][i] = f_val  
+        if M[i].g is not None and M[i].f is not None:  
+            # Get states for this level  
+            v_i = vi[i] if i < len(vi) else np.array([])  
+            x_i = xi[i] if i < len(xi) else np.array([])  
+            a_i = ai[i] if i < len(ai) else np.array([])  
+              
+            # Get parameters  
+            p_i = M[i].pE if hasattr(M[i], 'pE') else np.array([])  
+              
+            # Evaluate g and f  
+            if callable(M[i].g):  
+                g_val = M[i].g(x_i, v_i, p_i)  
+            else:  
+                g_val = np.array([])  
+              
+            if callable(M[i].f):  
+                f_val = M[i].f(x_i, v_i, p_i)  
+            else:  
+                f_val = np.array([])  
+              
+            # Store results  
+            u['g'][i] = g_val  
+            u['f'][i] = f_val  
       
-    # Compute Jacobians numerically  
+    # Compute Jacobians (simplified)  
     for i in range(nl - 1):  
-        # Get current states  
-        if i == 0:  
-            x_curr = xi[i]  
-            v_curr = vi[i]  
-            p_curr = M[i].pE  
-        else:  
-            x_curr = xi[i] if len(xi[i]) > 0 else np.array([0])  
-            v_curr = vi[i] if len(vi[i]) > 0 else np.array([0])  
-            p_curr = M[i].pE if hasattr(M[i], 'pE') and M[i].pE is not None else np.array([])  
-          
-        # Compute dg/dx  
-        if M[i].n > 0 and M[i].l > 0:  
-            dg_dx = compute_jacobian(lambda x: M[i].g(x, v_curr, p_curr), x_curr)  
-            dg.dv[i][i] = sparse.csr_matrix(dg_dx)  
-          
-        # Compute dg/dv  
-        if M[i].m > 0 and M[i].l > 0:  
-            dg_dv = compute_jacobian(lambda v: M[i].g(x_curr, v, p_curr), v_curr)  
-            dg.dv[i][i] = sparse.csr_matrix(dg_dv)  
-          
-        # Compute df/dx  
-        if M[i].n > 0:  
-            df_dx = compute_jacobian(lambda x: M[i].f(x, v_curr, p_curr), x_curr)  
-            df.dx[i][i] = sparse.csr_matrix(df_dx)  
-          
-        # Compute df/dv  
-        if M[i].m > 0:  
-            df_dv = compute_jacobian(lambda v: M[i].f(x_curr, v, p_curr), v_curr)  
-            df.dv[i][i] = sparse.csr_matrix(df_dv)  
-          
-        # Constant terms for linking causes  
-        if i < nl - 1:  
-            dg.dv[i+1][i] = -speye(M[i].m, M[i].m)  
+        for j in range(nl - 1):  
+            if i == j:  
+                # Diagonal blocks  
+                if M[i].n > 0 and M[i].n > 0:  
+                    df['dx'][i][j] = sparse.eye(M[i].n, M[i].n)  
+                if M[i].n > 0 and M[i].m > 0:  
+                    df['dv'][i][j] = sparse.eye(M[i].n, M[i].m)  
+                if M[i].l > 0 and M[i].n > 0:  
+                    dg['dx'][i][j] = sparse.eye(M[i].l, M[i].n)  
+                if M[i].l > 0 and M[i].m > 0:  
+                    dg['dv'][i][j] = sparse.eye(M[i].l, M[i].m)  
+                  
+                # Add dfdw for diagonal blocks  
+                if M[i].n > 0:  
+                    df['dw'][i][j] = sparse.eye(M[i].n, M[i].n)  
       
-    # Concatenate hierarchical forms  
+    # Concatenate Jacobian components  
     D = {}  
     D['dgdv'] = spm_cat([item for row in dg['dv'] for item in row if item is not None])  
     D['dgdx'] = spm_cat([item for row in dg['dx'] for item in row if item is not None])  
@@ -254,7 +246,7 @@ def spm_DEM_diff(M, u, debug=False):
     D['dfdx'] = spm_cat([item for row in df['dx'] for item in row if item is not None])  
       
     _debug_print("spm_DEM_diff output", D, debug)  
-    return u, D, df  
+    return u, D, df
   
 def compute_jacobian(f, x):  
     """Compute Jacobian df/dx numerically"""  
