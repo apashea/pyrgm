@@ -502,9 +502,8 @@ def spm_DEM_int(M, z, w, u, debug=False):
     nE = M[0].E.n if hasattr(M[0], 'E') and M[0].E is not None else 6  
     dt = M[0].E.dt if hasattr(M[0], 'E') and M[0].E is not None else 1  
       
-    # Time integration loop - simplified approach matching MATLAB  
+    # Time integration using MATLAB's matrix exponential approach  
     for t in range(N):  
-        # Simple Euler integration for each level  
         for i in range(m):  
             if t < N - 1:  
                 # Update causal states  
@@ -515,22 +514,35 @@ def spm_DEM_int(M, z, w, u, debug=False):
                     if isinstance(v_new, np.ndarray) and v_new.size > 0:  
                         V[i][:, t+1] = v_new  
                   
-                # Update hidden states  
+                # Update hidden states using matrix exponential (MATLAB approach)  
                 if hasattr(M[i].f, '__call__'):  
                     x_state = X[i][:, t].toarray().flatten() if X[i][:, t].nnz > 0 else np.zeros(M[i].n)  
                     v_state = V[i][:, t].toarray().flatten() if V[i][:, t].nnz > 0 else np.zeros(M[i].l)  
-                    x_new = M[i].f(x_state, v_state, M[i].pE)  
-                    if isinstance(x_new, np.ndarray) and x_new.size > 0:  
-                        # FIXED: Reshape x_new to column vector to match sparse matrix shape  
-                        x_new_col = x_new.reshape(-1, 1)  
-                        X[i][:, t+1] = X[i][:, t] + dt * x_new_col  
-                        if i < len(w) and w[i] is not None and hasattr(w[i], 'shape') and w[i].shape[1] > t:  
-                            if sparse.issparse(w[i]):  
-                                w_col = w[i][:, t].toarray().flatten()  
-                            else:  
-                                w_col = w[i][:, t]  
-                            if w_col.size > 0:  
-                                X[i][:, t+1] = X[i][:, t+1] + w_col.reshape(-1, 1)  
+                      
+                    # Compute Jacobian J = df/dx at current state  
+                    J = compute_jacobian(M[i].f, x_state, v_state, M[i].pE)  
+                      
+                    # Compute f(x)  
+                    f_val = M[i].f(x_state, v_state, M[i].pE)  
+                      
+                    # Matrix exponential update: x(t+dt) = x(t) + (expm(dt*J) - I)*inv(J)*f  
+                    try:  
+                        expJ = expm(dt * J)  
+                        U_matrix = np.linalg.solve(J, (expJ - np.eye(len(J))))  
+                        x_update = U_matrix @ f_val  
+                        X[i][:, t+1] = X[i][:, t] + x_update.reshape(-1, 1)  
+                    except:  
+                        # Fallback to Euler if matrix operations fail  
+                        X[i][:, t+1] = X[i][:, t] + dt * f_val.reshape(-1, 1)  
+                      
+                    # Add state noise  
+                    if i < len(w) and w[i] is not None and hasattr(w[i], 'shape') and w[i].shape[1] > t:  
+                        if sparse.issparse(w[i]):  
+                            w_col = w[i][:, t].toarray().flatten()  
+                        else:  
+                            w_col = w[i][:, t]  
+                        if w_col.size > 0:  
+                            X[i][:, t+1] = X[i][:, t+1] + w_col.reshape(-1, 1)  
                   
                 # Add innovations  
                 if isinstance(z, list) and i < len(z) and z[i] is not None:  
@@ -552,8 +564,21 @@ def spm_DEM_int(M, z, w, u, debug=False):
                     W[i][:, t] = X[i][:, t]  
       
     _debug_print("spm_DEM_int output", (V, X, Z, W), debug)  
-    return V, X, Z, W
-
+    return V, X, Z, W  
+  
+def compute_jacobian(f, x, v, p):  
+    """Compute Jacobian df/dx numerically"""  
+    eps = 1e-6  
+    f0 = f(x, v, p)  
+    J = np.zeros((len(x), len(x)))  
+      
+    for j in range(len(x)):  
+        x_eps = x.copy()  
+        x_eps[j] += eps  
+        f_eps = f(x_eps, v, p)  
+        J[:, j] = (f_eps - f0) / eps  
+      
+    return J
 def spm_DEM_generate(M, U, P=None, h=None, g=None, debug=False):  
     """Generate data for a Hierarchical Dynamic Model (HDM)"""  
     _debug_print("spm_DEM_generate input", (M, U), debug)  
