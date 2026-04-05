@@ -184,18 +184,14 @@ def spm_DEM_diff(M, u, debug=False):
                 vi_template.append(np.array([[M[i].v]]))  
             else:  
                 vi_template.append(np.array(M[i].v))  
-        else:  
-            vi_template.append(np.array([]))  
           
-        # Hidden states - FIXED: Use 1D shape for vectors  
+        # Hidden states  
         if M[i].n > 0:  
             if np.isscalar(M[i].x):  
                 xi_template.append(np.array([M[i].x]))  
             else:  
                 # FIXED: Use 1D shape for vectors, not 2D  
                 xi_template.append(np.array(M[i].x).flatten())  
-        else:  
-            xi_template.append(np.array([]))  
           
         # Action states  
         if hasattr(M[i], 'k') and M[i].k > 0:  
@@ -203,8 +199,6 @@ def spm_DEM_diff(M, u, debug=False):
                 ai_template.append(np.array([[M[i].a]]))  
             else:  
                 ai_template.append(np.array(M[i].a))  
-        else:  
-            ai_template.append(np.array([]))  
       
     # Extract and concatenate states for current time step  
     v_vec = []  
@@ -244,7 +238,7 @@ def spm_DEM_diff(M, u, debug=False):
     xi = spm_unvec(x_full, xi_template)  
     ai = spm_unvec(a_full, ai_template)  
       
-    # Debug output after unvectorization  
+    # Debug output to check unvectorization  
     _debug_print(f"After unvectorization:", None, debug)  
     _debug_print(f"  xi length: {len(xi)}, expected: {nl}", None, debug)  
     _debug_print(f"  vi length: {len(vi)}, expected: {nl}", None, debug)  
@@ -253,19 +247,17 @@ def spm_DEM_diff(M, u, debug=False):
     _debug_print(f"  vi shapes: {[v.shape if hasattr(v, 'shape') else 'scalar' for v in vi]}", None, debug)  
     _debug_print(f"  ai shapes: {[a.shape if hasattr(a, 'shape') else 'scalar' for a in ai]}", None, debug)  
       
-    # Bounds checking before loop  
-    for i in range(nl):  
-        if i >= len(xi):  
-            _debug_print(f"ERROR: i={i} >= len(xi)={len(xi)}", None, debug)  
-        if i >= len(vi):  
-            _debug_print(f"ERROR: i={i} >= len(vi)={len(vi)}", None, debug)  
-        if i >= len(ai):  
-            _debug_print(f"ERROR: i={i} >= len(ai)={len(ai)}", None, debug)  
+    # Check bounds before loop  
+    _debug_print(f"Loop bounds: i in range({nl-1}), len(xi)={len(xi)}, len(vi)={len(vi)}", None, debug)  
       
-    # Evaluate functions and compute derivatives  
+    # Evaluate functions and compute Jacobians  
     for i in range(nl - 1):  
-        if i < len(xi) and i < len(vi):  
-            # Lower levels  
+        if i >= len(xi) or i >= len(vi):  
+            _debug_print(f"ERROR: i={i} >= len(xi)={len(xi)} or len(vi)={len(vi)}", None, debug)  
+            continue  
+          
+        # Top level  
+        if i == 0:  
             g_val = M[i].g(xi[i], vi[i], M[i].pE)  
             f_val = M[i].f(xi[i], vi[i], M[i].pE)  
               
@@ -277,6 +269,15 @@ def spm_DEM_diff(M, u, debug=False):
             dg['dv'][i][i] = compute_jacobian(lambda x: M[i].g(xi[i], x, M[i].pE), vi[i], debug=debug)  
             dg['dx'][i][i] = compute_jacobian(lambda x: M[i].g(x, vi[i], M[i].pE), xi[i], debug=debug)  
             dg['dp'][i][i] = compute_jacobian(lambda x: M[i].g(xi[i], vi[i], x), M[i].pE, debug=debug)  
+        else:  
+            # Lower levels  
+            g_val = M[i].g(xi[i], vi[i], M[i].pE)  
+            f_val = M[i].f(xi[i], vi[i], M[i].pE)  
+              
+            # Compute numerical Jacobians  
+            df['dv'][i][i] = compute_jacobian(lambda x: M[i].f(xi[i], x, M[i].pE), vi[i], debug=debug)  
+            df['dx'][i][i] = compute_jacobian(lambda x: M[i].f(x, vi[i], M[i].pE), xi[i], debug=debug)  
+            df['dp'][i][i] = compute_jacobian(lambda x: M[i].f(xi[i], vi[i], x), M[i].pE, debug=debug)  
       
     # Set constant terms for linking causes over levels  
     for i in range(nl - 1):  
@@ -600,6 +601,13 @@ def spm_DEM_M_set(M, debug=False):
     """Set indices and perform checks on hierarchical models"""  
     g = len(M)  
       
+    # DEBUG: Show initial g states  
+    for i in range(g):  
+        if hasattr(M[i], 'g') and M[i].g is not None:  
+            _debug_print(f"Initial M[{i}].g: {M[i].g}", None, debug)  
+        else:  
+            _debug_print(f"Initial M[{i}].g: None", None, debug)  
+      
     # Check supra-ordinate level and add one if necessary  
     if hasattr(M[g-1].g, '__call__'):  
         M.append(ModelLevel())  
@@ -747,6 +755,13 @@ def spm_DEM_M_set(M, debug=False):
             M[i].sv = M[0].E.s if hasattr(M[0], 'E') and M[0].E is not None else 0  
         if not hasattr(M[i], 'sw'):  
             M[i].sw = M[0].E.s if hasattr(M[0], 'E') and M[0].E is not None else 0  
+      
+    # DEBUG: Show final g states  
+    for i in range(g):  
+        if hasattr(M[i], 'g') and M[i].g is not None:  
+            _debug_print(f"Final M[{i}].g: {M[i].g}", None, debug)  
+        else:  
+            _debug_print(f"WARNING: M[{i}].g is None after M_set", None, debug)  
       
     return M
   
