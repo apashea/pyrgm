@@ -493,8 +493,13 @@ def spm_cat(x, d=None, debug=False):
             if item.size > 0:  
                 matrices.append(sparse.csr_matrix(item))  
         else:  
-            # Handle scalars  
-            matrices.append(sparse.csr_matrix(np.array([[item]])))  
+            # Handle scalars - FIXED: Check if already array-like  
+            if hasattr(item, 'shape') and hasattr(item, 'size'):  
+                # Already a matrix/array, convert directly  
+                matrices.append(sparse.csr_matrix(item))  
+            else:  
+                # True scalar, wrap in 2D array  
+                matrices.append(sparse.csr_matrix(np.array([[item]])))  
       
     if not matrices:  
         return sparse.csr_matrix((0, 0))  
