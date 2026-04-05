@@ -160,16 +160,16 @@ def spm_DEM_diff(M, u, debug=False):
       
     # Initialize Jacobian matrices  
     dg = {  
-        'dv': [[sparse.csr_matrix((M[i].l, M[i].m)) for j in range(nl - 1)] for i in range(nl)],  
-        'dx': [[sparse.csr_matrix((M[i].l, M[i].n)) for j in range(nl - 1)] for i in range(nl)],  
-        'dp': [[sparse.csr_matrix((M[i].l, M[i].p)) for j in range(nl - 1)] for i in range(nl)]  
+        'dv': [[sparse.csr_matrix((M[i].l, M[j].m)) for j in range(nl - 1)] for i in range(nl)],  
+        'dx': [[sparse.csr_matrix((M[i].l, M[j].n)) for j in range(nl - 1)] for i in range(nl)],  
+        'dp': [[sparse.csr_matrix((M[i].l, M[j].p)) for j in range(nl - 1)] for i in range(nl)]  
     }  
       
     df = {  
-        'dv': [[sparse.csr_matrix((M[i].n, M[i].m)) for j in range(nl - 1)] for i in range(nl - 1)],  
-        'dx': [[sparse.csr_matrix((M[i].n, M[i].n)) for j in range(nl - 1)] for i in range(nl - 1)],  
-        'dp': [[sparse.csr_matrix((M[i].n, M[i].p)) for j in range(nl - 1)] for i in range(nl - 1)],  
-        'dw': [[sparse.csr_matrix((M[i].n, M[i].n)) for j in range(nl - 1)] for i in range(nl - 1)]  # ADD THIS LINE  
+        'dv': [[sparse.csr_matrix((M[i].n, M[j].m)) for j in range(nl - 1)] for i in range(nl - 1)],  
+        'dx': [[sparse.csr_matrix((M[i].n, M[j].n)) for j in range(nl - 1)] for i in range(nl - 1)],  
+        'dp': [[sparse.csr_matrix((M[i].n, M[j].p)) for j in range(nl - 1)] for i in range(nl - 1)],  
+        'dw': [[sparse.csr_matrix((M[i].n, M[i].n)) for j in range(nl - 1)] for i in range(nl - 1)]  
     }  
       
     # Prepare templates for unvectorization  
@@ -178,30 +178,31 @@ def spm_DEM_diff(M, u, debug=False):
     ai_template = []  
       
     for i in range(nl):  
-        # Causal states template  
+        # Causal states  
         if M[i].l > 0:  
             if np.isscalar(M[i].v):  
                 vi_template.append(np.array([[M[i].v]]))  
             else:  
-                vi_template.append(np.array([M[i].v]))  
+                vi_template.append(np.array(M[i].v))  
         else:  
             vi_template.append(np.array([]))  
           
-        # Hidden states template  
+        # Hidden states - FIXED: Use 1D shape for vectors  
         if M[i].n > 0:  
             if np.isscalar(M[i].x):  
-                xi_template.append(np.array([[M[i].x]]))  
-            else:  
                 xi_template.append(np.array([M[i].x]))  
+            else:  
+                # FIXED: Use 1D shape for vectors, not 2D  
+                xi_template.append(np.array(M[i].x).flatten())  
         else:  
             xi_template.append(np.array([]))  
           
-        # Action states template  
+        # Action states  
         if hasattr(M[i], 'k') and M[i].k > 0:  
             if np.isscalar(M[i].a):  
                 ai_template.append(np.array([[M[i].a]]))  
             else:  
-                ai_template.append(np.array([M[i].a]))  
+                ai_template.append(np.array(M[i].a))  
         else:  
             ai_template.append(np.array([]))  
       
@@ -261,9 +262,9 @@ def spm_DEM_diff(M, u, debug=False):
         if i >= len(ai):  
             _debug_print(f"ERROR: i={i} >= len(ai)={len(ai)}", None, debug)  
       
-    # Evaluate functions and compute Jacobians  
-    for i in range(min(nl - 1, len(xi), len(vi))):  
-        if i < nl - 1:  
+    # Evaluate functions and compute derivatives  
+    for i in range(nl - 1):  
+        if i < len(xi) and i < len(vi):  
             # Lower levels  
             g_val = M[i].g(xi[i], vi[i], M[i].pE)  
             f_val = M[i].f(xi[i], vi[i], M[i].pE)  
@@ -272,10 +273,10 @@ def spm_DEM_diff(M, u, debug=False):
             df['dv'][i][i] = compute_jacobian(lambda x: M[i].f(xi[i], x, M[i].pE), vi[i], debug=debug)  
             df['dx'][i][i] = compute_jacobian(lambda x: M[i].f(x, vi[i], M[i].pE), xi[i], debug=debug)  
             df['dp'][i][i] = compute_jacobian(lambda x: M[i].f(xi[i], vi[i], x), M[i].pE, debug=debug)  
-          
-        dg['dv'][i][i] = compute_jacobian(lambda x: M[i].g(xi[i], x, M[i].pE), vi[i], debug=debug)  
-        dg['dx'][i][i] = compute_jacobian(lambda x: M[i].g(x, vi[i], M[i].pE), xi[i], debug=debug)  
-        dg['dp'][i][i] = compute_jacobian(lambda x: M[i].g(xi[i], vi[i], x), M[i].pE, debug=debug)  
+              
+            dg['dv'][i][i] = compute_jacobian(lambda x: M[i].g(xi[i], x, M[i].pE), vi[i], debug=debug)  
+            dg['dx'][i][i] = compute_jacobian(lambda x: M[i].g(x, vi[i], M[i].pE), xi[i], debug=debug)  
+            dg['dp'][i][i] = compute_jacobian(lambda x: M[i].g(xi[i], vi[i], x), M[i].pE, debug=debug)  
       
     # Set constant terms for linking causes over levels  
     for i in range(nl - 1):  
@@ -284,7 +285,6 @@ def spm_DEM_diff(M, u, debug=False):
       
     _debug_print("spm_DEM_diff output", (dg, df), debug)  
     return u, dg, df
-
 
 def compute_jacobian(func, x, debug=False):  
     """Compute Jacobian df/dx numerically"""  
