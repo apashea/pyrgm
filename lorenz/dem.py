@@ -159,60 +159,51 @@ def spm_DEM_diff(M, u, debug=False):
     n = M[0].E.n + 1 if hasattr(M[0], 'E') and M[0].E is not None else 1  
       
     # Initialize Jacobian matrices  
-    dg = {'dv': [], 'dx': [], 'dp': []}  
-    df = {'dv': [], 'dx': [], 'dp': []}  
+    dg = {  
+        'dv': [[sparse.csr_matrix((M[i].l, M[i].m)) for j in range(nl - 1)] for i in range(nl)],  
+        'dx': [[sparse.csr_matrix((M[i].l, M[i].n)) for j in range(nl - 1)] for i in range(nl)],  
+        'dp': [[sparse.csr_matrix((M[i].l, M[i].p)) for j in range(nl - 1)] for i in range(nl)]  
+    }  
       
-    # Create proper nested list structure for Jacobians  
-    for i in range(nl):  
-        dg['dv'].append([])  
-        dg['dx'].append([])  
-        dg['dp'].append([])  
-        if i < nl - 1:  
-            df['dv'].append([])  
-            df['dx'].append([])  
-            df['dp'].append([])  
-      
-    # Initialize Jacobian matrices with correct dimensions  
-    for i in range(nl - 1):  
-        for j in range(nl - 1):  
-            dg['dv'][i+1].append(sparse.csr_matrix((M[i].m, M[i].m)))  
-            dg['dx'][i+1].append(sparse.csr_matrix((M[i].m, M[i].n)))  
-            dg['dp'][i+1].append(sparse.csr_matrix((M[i].m, M[i].p)))  
-            dg['dv'][i].append(sparse.csr_matrix((M[i].l, M[i].m)))  
-            dg['dx'][i].append(sparse.csr_matrix((M[i].l, M[i].n)))  
-            dg['dp'][i].append(sparse.csr_matrix((M[i].l, M[i].p)))  
-            df['dv'][i].append(sparse.csr_matrix((M[i].n, M[i].m)))  
-            df['dx'][i].append(sparse.csr_matrix((M[i].n, M[i].n)))  
-            df['dp'][i].append(sparse.csr_matrix((M[i].n, M[i].p)))  
+    df = {  
+        'dv': [[sparse.csr_matrix((M[i].n, M[i].m)) for j in range(nl - 1)] for i in range(nl - 1)],  
+        'dx': [[sparse.csr_matrix((M[i].n, M[i].n)) for j in range(nl - 1)] for i in range(nl - 1)],  
+        'dp': [[sparse.csr_matrix((M[i].n, M[i].p)) for j in range(nl - 1)] for i in range(nl - 1)],  
+        'dw': [[sparse.csr_matrix((M[i].n, M[i].n)) for j in range(nl - 1)] for i in range(nl - 1)]  # ADD THIS LINE  
+    }  
       
     # Prepare templates for unvectorization  
     vi_template = []  
     xi_template = []  
     ai_template = []  
       
-    total_nv = sum([level.l for level in M])  
-    total_nx = sum([level.n for level in M])  
-    total_na = sum([level.m for level in M])  
-      
-    # Create templates based on model structure  
-    for level in M:  
-        if level.l > 0:  
-            if np.isscalar(level.v):  
-                vi_template.append(np.array([[level.v]]))  # 2D shape for sparse  
+    for i in range(nl):  
+        # Causal states template  
+        if M[i].l > 0:  
+            if np.isscalar(M[i].v):  
+                vi_template.append(np.array([[M[i].v]]))  
             else:  
-                vi_template.append(level.v)  
+                vi_template.append(np.array([M[i].v]))  
+        else:  
+            vi_template.append(np.array([]))  
           
-        if level.n > 0:  
-            if np.isscalar(level.x):  
-                xi_template.append(np.array([[level.x]]))  
+        # Hidden states template  
+        if M[i].n > 0:  
+            if np.isscalar(M[i].x):  
+                xi_template.append(np.array([[M[i].x]]))  
             else:  
-                xi_template.append(level.x)  
+                xi_template.append(np.array([M[i].x]))  
+        else:  
+            xi_template.append(np.array([]))  
           
-        if level.m > 0:  
-            if np.isscalar(level.a):  
-                ai_template.append(np.array([[level.a]]))  
+        # Action states template  
+        if hasattr(M[i], 'k') and M[i].k > 0:  
+            if np.isscalar(M[i].a):  
+                ai_template.append(np.array([[M[i].a]]))  
             else:  
-                ai_template.append(level.a)  
+                ai_template.append(np.array([M[i].a]))  
+        else:  
+            ai_template.append(np.array([]))  
       
     # Extract and concatenate states for current time step  
     v_vec = []  
@@ -252,7 +243,7 @@ def spm_DEM_diff(M, u, debug=False):
     xi = spm_unvec(x_full, xi_template)  
     ai = spm_unvec(a_full, ai_template)  
       
-    # DEBUG: Add debug prints after unvectorization  
+    # Debug output after unvectorization  
     _debug_print(f"After unvectorization:", None, debug)  
     _debug_print(f"  xi length: {len(xi)}, expected: {nl}", None, debug)  
     _debug_print(f"  vi length: {len(vi)}, expected: {nl}", None, debug)  
@@ -261,27 +252,23 @@ def spm_DEM_diff(M, u, debug=False):
     _debug_print(f"  vi shapes: {[v.shape if hasattr(v, 'shape') else 'scalar' for v in vi]}", None, debug)  
     _debug_print(f"  ai shapes: {[a.shape if hasattr(a, 'shape') else 'scalar' for a in ai]}", None, debug)  
       
-    # Evaluate model and compute Jacobians  
+    # Bounds checking before loop  
     for i in range(nl):  
-        # DEBUG: Check bounds before accessing  
         if i >= len(xi):  
             _debug_print(f"ERROR: i={i} >= len(xi)={len(xi)}", None, debug)  
-            break  
         if i >= len(vi):  
             _debug_print(f"ERROR: i={i} >= len(vi)={len(vi)}", None, debug)  
-            break  
-          
-        if i == 0:  
-            # Top level  
-            g_val = M[i].g(xi[i], vi[i], M[i].pE)  
-            f_val = M[i].f(xi[i], vi[i], M[i].pE)  
-        else:  
+        if i >= len(ai):  
+            _debug_print(f"ERROR: i={i} >= len(ai)={len(ai)}", None, debug)  
+      
+    # Evaluate functions and compute Jacobians  
+    for i in range(min(nl - 1, len(xi), len(vi))):  
+        if i < nl - 1:  
             # Lower levels  
             g_val = M[i].g(xi[i], vi[i], M[i].pE)  
             f_val = M[i].f(xi[i], vi[i], M[i].pE)  
-          
-        # Compute numerical Jacobians  
-        if i < nl - 1:  
+              
+            # Compute numerical Jacobians  
             df['dv'][i][i] = compute_jacobian(lambda x: M[i].f(xi[i], x, M[i].pE), vi[i], debug=debug)  
             df['dx'][i][i] = compute_jacobian(lambda x: M[i].f(x, vi[i], M[i].pE), xi[i], debug=debug)  
             df['dp'][i][i] = compute_jacobian(lambda x: M[i].f(xi[i], vi[i], x), M[i].pE, debug=debug)  
