@@ -252,8 +252,25 @@ def spm_DEM_diff(M, u, debug=False):
     xi = spm_unvec(x_full, xi_template)  
     ai = spm_unvec(a_full, ai_template)  
       
+    # DEBUG: Add debug prints after unvectorization  
+    _debug_print(f"After unvectorization:", None, debug)  
+    _debug_print(f"  xi length: {len(xi)}, expected: {nl}", None, debug)  
+    _debug_print(f"  vi length: {len(vi)}, expected: {nl}", None, debug)  
+    _debug_print(f"  ai length: {len(ai)}, expected: {nl}", None, debug)  
+    _debug_print(f"  xi shapes: {[x.shape if hasattr(x, 'shape') else 'scalar' for x in xi]}", None, debug)  
+    _debug_print(f"  vi shapes: {[v.shape if hasattr(v, 'shape') else 'scalar' for v in vi]}", None, debug)  
+    _debug_print(f"  ai shapes: {[a.shape if hasattr(a, 'shape') else 'scalar' for a in ai]}", None, debug)  
+      
     # Evaluate model and compute Jacobians  
     for i in range(nl):  
+        # DEBUG: Check bounds before accessing  
+        if i >= len(xi):  
+            _debug_print(f"ERROR: i={i} >= len(xi)={len(xi)}", None, debug)  
+            break  
+        if i >= len(vi):  
+            _debug_print(f"ERROR: i={i} >= len(vi)={len(vi)}", None, debug)  
+            break  
+          
         if i == 0:  
             # Top level  
             g_val = M[i].g(xi[i], vi[i], M[i].pE)  
@@ -279,8 +296,9 @@ def spm_DEM_diff(M, u, debug=False):
             dg['dv'][i + 1][i] = -sparse.eye(M[i].m, M[i].m, format='csr')  
       
     _debug_print("spm_DEM_diff output", (dg, df), debug)  
-    return u, dg, df  
-  
+    return u, dg, df
+
+
 def compute_jacobian(func, x, debug=False):  
     """Compute Jacobian df/dx numerically"""  
     eps = 1e-6  
